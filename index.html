@@ -1,0 +1,4358 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>リー教・構造図ミニエディタ</title>
+<style>
+  :root{
+    --bg:#f7f7f3;
+    --panel:#ffffff;
+    --ink:#1f2328;
+    --muted:#6b7280;
+    --line:#d8dbe0;
+    --accent:#111827;
+    --cursor:rgba(219,234,254,.55);
+    --cursor-outline:rgba(37,99,235,.32);
+    --mark:#7c2d12;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Noto Sans Mono CJK JP", monospace;
+    color:var(--ink);
+    background:var(--bg);
+  }
+  .app{
+    max-width:1100px;
+    margin:0 auto;
+    padding:24px;
+  }
+  .top{
+    display:flex;
+    gap:12px;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:16px;
+  }
+  h1{
+    font-size:18px;
+    margin:0;
+  }
+  .mode{
+    font-size:12px;
+    border:1px solid var(--line);
+    background:var(--panel);
+    padding:6px 10px;
+    border-radius:999px;
+  }
+  .mode.pending{
+    border-color:#f59e0b;
+    background:#fffbeb;
+  }
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:14px;
+    overflow:hidden;
+    box-shadow:0 3px 20px rgba(0,0,0,.04);
+  }
+  .input-wrap{
+    padding:14px;
+    border-bottom:1px solid var(--line);
+  }
+  textarea{
+    width:100%;
+    min-height:90px;
+    resize:vertical;
+    border:0;
+    outline:none;
+    font:inherit;
+    font-size:17px;
+    line-height:1.55;
+    color:var(--ink);
+    background:transparent;
+  }
+  .workspace{
+    position:relative;
+    min-height:260px;
+    padding:28px 24px 40px;
+    overflow-x:auto;
+  }
+  .arrow-layer{
+    position:absolute;
+    left:0;
+    top:0;
+    z-index:3;
+    pointer-events:none;
+    overflow:visible;
+  }
+  .group-layer{
+    position:absolute;
+    left:0;
+    top:0;
+    z-index:1;
+    pointer-events:none;
+    overflow:visible;
+  }
+  .word.group-member{
+    padding-bottom:27px;
+  }
+  /* V下線そのものをT化した場合、下線内の各単語の個別表示は描画しない。
+     値は保持するので、T解除後には元の表示へ戻る。 */
+  .word.group-verbal-active .mark,
+  .word.group-verbal-active .verbal{
+    visibility:hidden;
+  }
+  /* V選択表示は実際に消費するslot自身だけを囲う。
+     灰色(active/現在位置)は青より一回り大きく、固定済みオレンジは青と同寸法。 */
+  .slot-group-selecting-active{
+    position:relative;
+    background:rgba(229,231,235,.42);
+    border-radius:4px;
+    z-index:6;
+  }
+  /* 灰色のV選択枠は、青/オレンジと同じslot矩形を基準にしつつ、
+     上下左右へ固定2pxぶん外側に置く。倍率拡大はしない。
+     オレンジの2px外周のすぐ外側へ灰色2pxボーダーが接する。 */
+  .slot-group-selecting-active::after{
+    content:"";
+    position:absolute;
+    left:-4px;
+    right:-4px;
+    top:-4px;
+    bottom:-4px;
+    border:2px dashed rgba(107,114,128,.68);
+    border-radius:8px;
+    box-sizing:border-box;
+    pointer-events:none;
+    z-index:20;
+  }
+  .slot-group-selecting-fixed{
+    background:rgba(254,215,170,.50);
+    border:2px solid rgba(234,88,12,.76);
+    border-radius:4px;
+    box-sizing:border-box;
+    z-index:7;
+  }
+  /* V選択中の現在位置。固定済み範囲上でも、より大きい灰色枠を最前面に出す。 */
+  .slot-group-selection-cursor{
+    position:relative;
+    background:rgba(229,231,235,.58);
+    border-radius:4px;
+    z-index:8;
+  }
+  .slot-group-selection-cursor::after{
+    content:"";
+    position:absolute;
+    /* 青/オレンジの2px外周より、さらに固定2pxだけ外側。
+       そのため固定済みオレンジ枠が灰色枠の直内側に残って見える。 */
+    left:-4px;
+    right:-4px;
+    top:-4px;
+    bottom:-4px;
+    border:2px solid rgba(75,85,99,.78);
+    border-radius:8px;
+    box-sizing:border-box;
+    pointer-events:none;
+    z-index:21;
+  }
+  .group-underline{
+    position:absolute;
+    height:0;
+    border-top:2px solid var(--mark);
+    pointer-events:auto;
+    cursor:pointer;
+  }
+  .group-underline.group-underline-cursor{
+    border-top-color:var(--mark);
+    z-index:8;
+  }
+  /* 空のgroup標識slotを選択しているときのカーソル。
+     .group-underline 自身の border-top:2px が containing block の上側を占めるため、
+     pseudo-element の top:0 がちょうど線の下端に対応する。 */
+  .group-underline.group-underline-cursor::after{
+    content:"";
+    position:absolute;
+    /* cursor の外形を下線そのものの左右端に一致させる。
+       border は box-sizing:border-box の内側に含めるので、はみ出させない。 */
+    left:0;
+    right:0;
+    top:0;
+    /* 全カーソルは border を含めた外形全体を20pxに統一する。 */
+    height:20px;
+    box-sizing:border-box;
+    border:2px solid var(--cursor-outline);
+    background:var(--cursor);
+    border-radius:4px;
+    pointer-events:none;
+    z-index:-1;
+  }
+  .group-mark{
+    position:absolute;
+    min-width:24px;
+    height:20px;
+    display:inline-flex;
+    align-items:baseline;
+    justify-content:center;
+    box-sizing:border-box;
+    color:var(--mark);
+    font-size:14px;
+    line-height:18px;
+    font-weight:700;
+    white-space:nowrap;
+    pointer-events:auto;
+    cursor:pointer;
+  }
+  .group-mark::before{
+    content:"\200B";
+    visibility:hidden;
+    flex:0 0 0;
+    width:0;
+    font-size:14px;
+    line-height:18px;
+  }
+  .group-mark.group-mark-cursor{
+    background:var(--cursor);
+    border:2px solid var(--cursor-outline);
+    border-radius:4px;
+    padding:0 3px;
+    box-sizing:border-box;
+    z-index:6;
+  }
+  .group-mark.pending-mark{
+    color:#9ca3af;
+  }
+
+  /* 非連続下線の対応マーク。色だけでgroupを識別する、塗りつぶし正方形。
+     left/top は正方形の中心座標として与える。 */
+  .group-link-mark{
+    position:absolute;
+    width:9px;
+    height:9px;
+    min-width:9px;
+    box-sizing:border-box;
+    transform:translate(-50%,-50%);
+    padding:0;
+    border:0;
+    border-radius:0;
+    z-index:7;
+    pointer-events:none;
+  }
+  .group-verbal{
+    position:absolute;
+    height:26px;
+    pointer-events:none;
+  }
+  .group-verbal-stem{
+    position:absolute;
+    left:50%;
+    top:0;
+    height:24px;
+    border-left:2px solid var(--mark);
+    transform:translateX(-1px);
+  }
+  .group-verbal-left,
+  .group-verbal-right{
+    position:absolute;
+    /* 横線は2px厚。slotの上端をその直下へ置き、隙間を作らない。 */
+    top:2px;
+    height:20px;
+    box-sizing:border-box;
+    display:inline-flex;
+    align-items:baseline;
+    justify-content:center;
+    color:var(--mark);
+    font-size:14px;
+    line-height:18px;
+    font-weight:700;
+    white-space:nowrap;
+    pointer-events:auto;
+    cursor:pointer;
+  }
+  /* T の内部slotは横棒の端点〜中央の縦棒までをそのまま占める。 */
+  .group-verbal-slot-cursor{
+    background:var(--cursor);
+    border:2px solid var(--cursor-outline);
+    border-radius:4px;
+    box-sizing:border-box;
+    z-index:6;
+  }
+
+  .sentence{
+    position:relative;
+    z-index:2;
+    display:flex;
+    flex-wrap:wrap;
+    align-items:flex-start;
+    gap:14px 10px;
+    line-height:1;
+  }
+
+  /* 入力テキスト中の改行は、構造図でも強制的な文境界にする。 */
+  .sentence-break{
+    flex-basis:100%;
+    width:0;
+    height:0;
+  }
+  .sentence-break.empty-line{
+    height:64px;
+  }
+
+  /*
+    単語境界。通常時は幅0で、記号がある場合だけ表示幅を持つ。
+    NORMALモードでは空の境界にも細いカーソルを出す。
+  */
+  .gap-marker{
+    position:relative;
+    align-self:flex-start;
+    display:inline-flex;
+    align-items:flex-start;
+    justify-content:center;
+    min-width:0;
+    width:0;
+    height:64px;
+    margin-left:-5px;
+    margin-right:-5px;
+    color:var(--mark);
+    font-size:38px;
+    line-height:46px;
+    font-weight:400;
+    white-space:nowrap;
+    user-select:none;
+    z-index:1;
+  }
+  .gap-marker.has-symbol{
+    width:auto;
+    min-width:16px;
+    margin-left:-3px;
+    margin-right:-3px;
+  }
+  .gap-marker.gap-cursor{
+    width:8px;
+    min-width:8px;
+    margin-left:-4px;
+    margin-right:-4px;
+  }
+  .gap-marker.gap-cursor::after{
+    content:"";
+    position:absolute;
+    left:50%;
+    top:1px;
+    bottom:5px;
+    border-left:2px solid rgba(37,99,235,.5);
+  }
+  .gap-marker.has-symbol.gap-cursor{
+    width:auto;
+    min-width:18px;
+    padding:0 3px;
+    background:rgba(219,234,254,.38);
+    outline:2px solid rgba(37,99,235,.25);
+    border-radius:4px;
+  }
+  .gap-marker.has-symbol.gap-cursor::after{
+    display:none;
+  }
+
+  /*
+    各 word は同じ高さの3段を持つ。
+      1段目: 英単語
+      2段目: 通常記号 または T の横棒
+      3段目: T の左右記号
+    これにより、個別の bottom 値で位置合わせしない。
+  */
+  .word{
+    position:relative;
+    display:grid;
+    grid-template-columns:max-content;
+    grid-template-rows:22px 17px 25px;
+    justify-items:center;
+    align-items:start;
+    min-width:max-content;
+    padding:2px 5px 0;
+    border-radius:6px;
+    cursor:pointer;
+    user-select:none;
+  }
+  .word.cursor{
+    background:var(--cursor);
+    outline:2px solid var(--cursor-outline);
+  }
+  /* 通常(single)slotの横幅は単語のslot幅そのもの。
+     青カーソルだけでなく、V選択の灰色/オレンジも必ずこの同じ幾何を使う。 */
+  .mark.mark-cursor,
+  .mark.slot-group-selecting-active,
+  .mark.slot-group-selecting-fixed,
+  .mark.slot-group-selection-cursor{
+    width:100%;
+    min-width:20px;
+    box-sizing:border-box;
+    padding:0 3px;
+    position:relative;
+  }
+  .mark.mark-cursor{
+    background:var(--cursor);
+    border:2px solid var(--cursor-outline);
+    border-radius:4px;
+    box-sizing:border-box;
+    z-index:5;
+  }
+  .word.dummy-word{
+    min-width:8px;
+    width:8px;
+    padding-left:1px;
+    padding-right:1px;
+    cursor:pointer;
+  }
+  .word.dummy-word .token{
+    width:2px;
+    min-width:2px;
+  }
+  .word.has-verbal .mark{
+    visibility:hidden;
+  }
+  .word.has-verbal .token{
+    /* 下線は .verbal-top が兼ねるため、二重線を避ける */
+    text-decoration:none;
+  }
+
+  .token{
+    grid-row:1;
+    grid-column:1;
+    align-self:start;
+    font-size:19px;
+    line-height:21px;
+    white-space:pre;
+  }
+
+  /*
+    baseline-strut (::before) の基準線に実際の記号を合わせる。
+    (1) のように文字サイズが変わっても基準線の高さは変わらない。
+  */
+  .mark{
+    grid-row:2;
+    grid-column:1;
+    align-self:start;
+    height:20px;
+    min-width:20px;
+    display:inline-flex;
+    align-items:baseline;
+    justify-content:center;
+    font-weight:700;
+    color:var(--mark);
+    font-size:14px;
+    line-height:18px;
+    white-space:nowrap;
+  }
+  .mark::before{
+    content:"\200B";
+    visibility:hidden;
+    flex:0 0 0;
+    width:0;
+    font-size:14px;
+    line-height:18px;
+  }
+  .mark.number-mark{
+    font-size:14px;
+    font-weight:700;
+  }
+  .mark.pending-mark{
+    color:#9ca3af;
+    font-weight:700;
+  }
+  .dual-work{
+    grid-row:2;
+    grid-column:1;
+    align-self:start;
+    position:relative;
+    width:100%;
+    min-width:58px;
+    height:20px;
+  }
+  .dual-left,
+  .dual-right{
+    position:absolute;
+    top:0;
+    height:20px;
+    display:inline-flex;
+    align-items:baseline;
+    justify-content:center;
+    color:var(--mark);
+    font-size:14px;
+    line-height:18px;
+    font-weight:700;
+    white-space:nowrap;
+    box-sizing:border-box;
+    cursor:pointer;
+  }
+  .dual-left::before,
+  .dual-right::before{
+    content:"\200B";
+    visibility:hidden;
+    flex:0 0 0;
+    width:0;
+    font-size:14px;
+    line-height:18px;
+  }
+  .dual-slot-cursor{
+    background:var(--cursor);
+    border:2px solid var(--cursor-outline);
+    border-radius:4px;
+    box-sizing:border-box;
+    padding:0 4px;
+    position:absolute;
+    z-index:5;
+  }
+  .word.has-dual .mark{
+    visibility:hidden;
+  }
+  .arrow-source{
+    outline:2px dashed #9ca3af !important;
+    outline-offset:2px;
+    border-radius:4px;
+  }
+
+  .verbal{
+    grid-row:2 / span 2;
+    grid-column:1;
+    align-self:start;
+    position:relative;
+    width:100%;
+    min-width:66px;
+    height:38px;
+    pointer-events:none;
+  }
+
+  /* 単語の下線 = T字の横棒。これを1本だけ描く。 */
+  .verbal-top{
+    position:absolute;
+    left:0;
+    right:0;
+    top:0;
+    border-top:2px solid var(--mark);
+  }
+
+  /* 縦棒は左右の記号と同じ行を貫く。 */
+  .verbal-stem{
+    position:absolute;
+    left:50%;
+    top:0;
+    height:22px;
+    border-left:2px solid var(--mark);
+    transform:translateX(-1px);
+  }
+
+  /*
+    T の左右も同一の baseline row に置く。
+    左右の文字サイズが異なっても baseline-strut に揃う。
+  */
+  .verbal-left,
+  .verbal-right{
+    position:absolute;
+    /* 横線は2px厚。slotの上端をその直下へ置き、隙間を作らない。 */
+    top:2px;
+    height:20px;
+    box-sizing:border-box;
+    display:inline-flex;
+    align-items:baseline;
+    justify-content:center;
+    font-size:14px;
+    line-height:18px;
+    font-weight:700;
+    color:var(--mark);
+    text-align:center;
+    white-space:nowrap;
+  }
+  .verbal-left::before,
+  .verbal-right::before{
+    content:"\200B";
+    visibility:hidden;
+    flex:0 0 0;
+    width:0;
+    font-size:14px;
+    line-height:18px;
+  }
+  /* 横棒の左端〜中央棒が left slot、中央棒〜右端が right slot。 */
+  .verbal-slot-empty{
+    color:#9ca3af;
+    font-weight:400;
+  }
+  .verbal-editing{
+    color:#6b7280;
+    background:#e5e7eb;
+    border-radius:4px;
+    padding:0 3px;
+  }
+  .verbal-slot-cursor{
+    background:var(--cursor);
+    border:2px solid var(--cursor-outline);
+    border-radius:4px;
+    box-sizing:border-box;
+    position:absolute;
+    z-index:5;
+  }
+  .verbal-number-mark{
+    font-size:14px;
+  }
+  /* カーソル対象slotの高さは種類によらず常に同一。
+     T左右・通常slot・double・group slotで個別の高さを持たせない。 */
+  .mark,
+  .dual-left, .dual-right,
+  .verbal-left, .verbal-right,
+  .group-mark,
+  .group-verbal-left, .group-verbal-right{
+    height:20px !important;
+  }
+  .mark.mark-cursor,
+  .dual-slot-cursor,
+  .verbal-slot-cursor,
+  .group-mark.group-mark-cursor,
+  .group-verbal-slot-cursor,
+  .slot-group-selecting-active,
+  .slot-group-selecting-fixed,
+  .slot-group-selection-cursor{
+    min-height:20px;
+    height:20px !important;
+    box-sizing:border-box;
+  }
+
+  .status{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px 16px;
+    padding:10px 14px;
+    border-top:1px solid var(--line);
+    color:var(--muted);
+    font-size:12px;
+  }
+  kbd{
+    font:inherit;
+    color:var(--ink);
+    background:#f3f4f6;
+    border:1px solid #d1d5db;
+    border-bottom-width:2px;
+    border-radius:5px;
+    padding:1px 5px;
+  }
+  .internal-wrap{
+    border-top:1px solid var(--line);
+    background:#fafafa;
+  }
+  .internal-head{
+    padding:9px 14px 6px;
+    font-size:12px;
+    font-weight:700;
+    color:var(--muted);
+  }
+  .internal-json{
+    display:block;
+    width:100%;
+    min-height:190px;
+    max-height:360px;
+    resize:vertical;
+    box-sizing:border-box;
+    border:0;
+    border-top:1px solid var(--line);
+    background:#0f172a;
+    color:#e5e7eb;
+    padding:12px 14px;
+    font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size:12px;
+    line-height:1.5;
+    tab-size:2;
+    outline:none;
+    white-space:pre;
+    overflow:auto;
+  }
+  .help{
+    margin-top:16px;
+    color:var(--ink);
+    font-size:13px;
+    line-height:1.65;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:16px 18px 18px;
+  }
+  .help h2{
+    margin:0 0 12px;
+    font-size:16px;
+  }
+  .help h3{
+    margin:18px 0 6px;
+    font-size:13px;
+  }
+  .help h3:first-of-type{margin-top:0}
+  .help ul{
+    margin:0;
+    padding-left:22px;
+  }
+  .help li{margin:3px 0}
+  .help .note{color:var(--muted)}
+  .help kbd{white-space:nowrap}
+  .toolbar{
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+    padding:10px 14px;
+    border-bottom:1px solid var(--line);
+    background:#fafafa;
+  }
+  button{
+    font:inherit;
+    font-size:12px;
+    border:1px solid var(--line);
+    border-radius:7px;
+    background:white;
+    padding:6px 9px;
+    cursor:pointer;
+  }
+  button:hover{background:#f3f4f6}
+  @media(max-width:700px){
+    .app{padding:12px}
+    .workspace{padding:22px 14px 30px}
+    .token{font-size:17px}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <h1>リー教・構造図ミニエディタ</h1>
+    <div id="modeBadge" class="mode">NORMAL</div>
+  </div>
+
+  <div class="panel">
+    <div class="input-wrap">
+      <textarea id="input" spellcheck="false">His carrer culminated in his being elected President.</textarea>
+    </div>
+
+    <div class="toolbar">
+      <button data-mark="S">S</button>
+      <button data-mark="V">V</button>
+      <button data-mark="O">O</button>
+      <button data-mark="C">C</button>
+      <button data-mark="接">接</button>
+      <button data-mark="前">前</button>
+      <button data-mark="a">a</button>
+      <button data-mark="aC">aC</button>
+      <button data-mark="ad">ad</button>
+      <button data-mark="nC">nC</button>
+      <button data-mark="M">M</button>
+      <button data-mark="aux">aux</button>
+      <button data-mark="(1)">(1)</button>
+      <button data-mark="(2)">(2)</button>
+      <button data-mark="(3)">(3)</button>
+      <button data-mark="(4)">(4)</button>
+      <button data-mark="(5)">(5)</button>
+      <button data-mark="-(3)">-(3)</button>
+      <button data-mark="-(4)">-(4)</button>
+      <button data-mark="-(5)">-(5)</button>
+      <button id="verbalToggle">準動詞T</button>
+      <button id="verbalLeft">T左入力</button>
+      <button id="verbalRight">T右入力</button>
+      <button id="clearMark">記号削除</button>
+      <button id="clearAll">全記号削除</button>
+    </div>
+
+    <div class="workspace" id="workspace" tabindex="0" aria-label="構造図エディタ">
+      <div id="groupLayer" class="group-layer" aria-hidden="true"></div>
+      <svg id="arrowLayer" class="arrow-layer" aria-hidden="true"></svg>
+      <div id="sentence" class="sentence"></div>
+    </div>
+
+    <div class="internal-wrap">
+      <div class="internal-head">内部表現（JSON・リアルタイム）</div>
+      <textarea id="internalJson" class="internal-json" readonly spellcheck="false" aria-label="内部表現 JSON"></textarea>
+    </div>
+
+    <div class="status">
+      <span><kbd>h</kbd>/<kbd>l</kbd> 横移動</span>
+      <span><kbd>V</kbd> 連続語を下線選択（重ね掛け可）</span>
+      <span><kbd>Enter</kbd> 下線区間群を確定</span>
+      <span><kbd>U</kbd> 結合解除</span>
+      <span><kbd>j</kbd> 働きの標識 → V下線</span>
+      <span><kbd>k</kbd> V下線 → 最左の働きの標識</span>
+      <span><kbd>b</kbd> ボーダーモード</span>
+      <span><kbd>[</kbd><kbd>]</kbd><kbd>&lt;</kbd><kbd>&gt;</kbd><kbd>(</kbd><kbd>)</kbd> 選択位置の左に境界記号</span>
+      <span><kbd>0</kbd>/<kbd>$</kbd> 先頭・末尾</span>
+      <span><kbd>s</kbd>/<kbd>v</kbd>/<kbd>o</kbd>/<kbd>c</kbd>/<kbd>m</kbd> 記号</span>
+      <span><kbd>c</kbd><kbd>o</kbd><kbd>n</kbd> 接続詞 → 接</span>
+      <span><kbd>p</kbd><kbd>r</kbd><kbd>e</kbd> 前置詞 → 前</span>
+      <span><kbd>a</kbd> 形容詞</span>
+      <span><kbd>a</kbd><kbd>d</kbd> ad</span>
+      <span><kbd>a</kbd><kbd>d</kbd><kbd>o</kbd> 副詞的目的格</span>
+      <span><kbd>a</kbd><kbd>c</kbd> aC</span>
+      <span><kbd>a</kbd><kbd>u</kbd><kbd>x</kbd> aux</span>
+      <span><kbd>n</kbd><kbd>c</kbd> nC</span>
+      <span><kbd>t</kbd> 準動詞T</span>
+      <span><kbd>f</kbd> T左入力</span>
+      <span><kbd>g</kbd> T右入力</span>
+      <span><kbd>Enter</kbd> T入力確定</span>
+      <span><kbd>Esc</kbd> T入力取消</span>
+      <span><kbd>1</kbd>〜<kbd>5</kbd> (1)〜(5)</span>
+      <span><kbd>-</kbd><kbd>3</kbd>〜<kbd>-</kbd><kbd>5</kbd> -(3)〜-(5)</span>
+      <span><kbd>x</kbd> 記号削除</span>
+      <span><kbd>X</kbd> 構造削除（T / V下線）</span>
+      <span><kbd>r</kbd> a / ad / 副詞的目的格から修飾矢印</span>
+      <span><kbd>Enter</kbd> 矢印確定</span>
+      <span><kbd>R</kbd> 矢印削除</span>
+      <span><kbd>i</kbd> INSERT</span>
+      <span><kbd>Esc</kbd> NORMAL</span>
+    </div>
+  </div>
+
+  <div class="help">
+    <h2>操作ガイド</h2>
+
+    <h3>基本操作・モード</h3>
+    <ul>
+      <li><kbd>NORMAL</kbd> が構造編集モードです。構造図をクリックすると、その単語・slot・下線などを選択できます。</li>
+      <li><kbd>i</kbd> で <kbd>INSERT</kbd> に入り、上の英文を通常のテキストとして編集します。<kbd>Esc</kbd> で <kbd>NORMAL</kbd> に戻ります。</li>
+      <li>入力テキストの改行は文境界です。下線・T・矢印は文境界を跨げません。</li>
+      <li>英文を編集した場合、同じ位置にある既存の標識・構造は可能な範囲で保持されます。</li>
+    </ul>
+
+    <h3>カーソル移動</h3>
+    <ul>
+      <li><kbd>h</kbd>/<kbd>l</kbd>：表示上のslotを左/右へ移動します。通常slotだけでなく、二重slotやTの左右slotもそれぞれ独立した1位置として通過します。</li>
+      <li><kbd>j</kbd>：現在のslotを含む最も内側のV下線へ移動します。さらに押すと外側の包含構造へ進みます。包含構造がなければ次の入力行へ移動します。</li>
+      <li><kbd>k</kbd>：通常のV下線から、その内部の最左slotへ戻ります。通常slot上で外側構造がなければ前の入力行へ移動します。</li>
+      <li><kbd>0</kbd>：先頭位置へ移動。<kbd>$</kbd>：文末ダミー位置へ移動します。文末ダミーは文末境界へ記号を置くためにも使います。</li>
+    </ul>
+
+    <h3>働きの標識</h3>
+    <ul>
+      <li><kbd>s</kbd> → S、<kbd>s</kbd><kbd>'</kbd> → S'、<kbd>v</kbd> → V、<kbd>o</kbd> → O、<kbd>c</kbd> → C、<kbd>m</kbd> → M。</li>
+      <li><kbd>con</kbd> → 接、<kbd>pre</kbd> → 前。</li>
+      <li><kbd>a</kbd> → a、<kbd>ad</kbd> → ad、<kbd>ado</kbd> → 副詞的目的格、<kbd>ac</kbd> → aC、<kbd>aux</kbd> → aux、<kbd>nc</kbd> → nC。</li>
+      <li><kbd>1</kbd>〜<kbd>5</kbd> → (1)〜(5)、<kbd>-</kbd>の後に<kbd>3</kbd>〜<kbd>5</kbd> → -(3)〜-(5)。</li>
+      <li>a / ad / ado など複数キーの標識は途中状態が保留表示されます。<kbd>Esc</kbd> で保留入力を取り消せます。別の操作へ進むと、成立している候補は確定されます。</li>
+      <li><kbd>x</kbd>：現在選択している働きの標識を削除します。</li>
+      <li><kbd>d</kbd>：通常slotを左右2つのslotへ切り替えます。もう一度押すとsingleへ戻ります。左右は<kbd>h</kbd>/<kbd>l</kbd>で個別に選択します。</li>
+    </ul>
+
+    <h3>T（準動詞）</h3>
+    <ul>
+      <li><kbd>t</kbd>：現在の単語、または選択中のV下線をT化します。<kbd>t</kbd>はT化専用で、解除には使いません。</li>
+      <li>Tは左slot・右slotの2位置を持ち、<kbd>h</kbd>/<kbd>l</kbd>でそれぞれ選択できます。</li>
+      <li><kbd>f</kbd>：T左slotを直接編集。<kbd>g</kbd>：T右slotを直接編集。文字入力後、<kbd>Enter</kbd>で確定、<kbd>Esc</kbd>で取消します。</li>
+      <li><kbd>X</kbd>：単語TならTを削除します。V下線TならTだけを外して通常のV下線へ戻します。</li>
+    </ul>
+
+    <h3>V下線・連続/非連続範囲</h3>
+    <ul>
+      <li><kbd>V</kbd>：現在のslotから下線範囲の指定を開始します。選択対象はtokenではなく表示上のslotです。</li>
+      <li>範囲指定中は<kbd>h</kbd>/<kbd>l</kbd>で現在の部分範囲を伸縮します。現在位置/選択中は灰色、<kbd>V</kbd>で固定済みの部分範囲はオレンジで表示されます。</li>
+      <li>選択中にもう一度<kbd>V</kbd>を押すと、その部分範囲を固定します。その後<kbd>h</kbd>/<kbd>l</kbd>で離れた位置へ移動し、再度<kbd>V</kbd>で次の部分範囲を開始できます。</li>
+      <li><kbd>Enter</kbd>：すべての部分範囲を1つの下線groupとして確定。<kbd>Esc</kbd>：固定済み部分も含め、範囲指定全体をキャンセルします。</li>
+      <li>部分範囲が連続していれば1本の下線、離れていれば複数の下線として表示されます。非連続部分には同じ色の塗りつぶし正方形が付き、同じgroupであることを示します。</li>
+      <li>下線は重なり・包含・同一範囲を許します。1つの下線groupは、その内部に含む表示物すべてより下に、全部分を同じ高さで描画します。</li>
+      <li>通常のV下線自身にも独立したsingle slotがあります。下線を選択して標識キーを入力すると、このslotへ標識を設定できます。</li>
+      <li><kbd>j</kbd>で内部slotから包含するV下線へ、<kbd>k</kbd>で通常V下線から内部の最左slotへ移動できます。</li>
+      <li><kbd>t</kbd>でV下線全体をT化できます。<kbd>X</kbd>はV下線TならTだけ解除し、通常V下線なら下線構造を削除します。</li>
+      <li><kbd>U</kbd>：現在のV下線groupを解除し、そのgroup構造自体を削除します。</li>
+    </ul>
+
+    <h3>境界記号</h3>
+    <ul>
+      <li><kbd>[</kbd> <kbd>]</kbd> <kbd>&lt;</kbd> <kbd>&gt;</kbd> <kbd>(</kbd> <kbd>)</kbd>：NORMALのまま、現在位置の左側の境界へ記号を追加します。複数文字を重ねて保持できます。</li>
+      <li><kbd>b</kbd>：境界編集モードへ入ります。<kbd>h</kbd>/<kbd>l</kbd>で境界を移動、<kbd>0</kbd>/<kbd>$</kbd>で文頭/文末境界へ移動します。</li>
+      <li>境界編集モードでは同じ6種のキーで記号を追加し、<kbd>Backspace</kbd>で末尾1文字削除、<kbd>x</kbd>/<kbd>Delete</kbd>でその境界の記号を全削除します。</li>
+      <li><kbd>Esc</kbd>、<kbd>Enter</kbd>、または再度<kbd>b</kbd>で境界編集モードを終了します。</li>
+    </ul>
+
+    <h3>修飾矢印</h3>
+    <ul>
+      <li>始点にできるのは、標識が a / ad / 副詞的目的格 のslotです。そのslot上で<kbd>r</kbd>を押すと終点選択を開始します。</li>
+      <li>終点選択中も<kbd>h</kbd>/<kbd>l</kbd>/<kbd>j</kbd>/<kbd>k</kbd>/<kbd>0</kbd>/<kbd>$</kbd>で移動できます。</li>
+      <li><kbd>Enter</kbd>：現在slotを終点として確定。<kbd>Esc</kbd>：取消。<kbd>r</kbd>をもう一度押すと始点を選び直します。</li>
+      <li>1つの始点から保持できる矢印は1本です。新しく確定すると、その始点からの既存矢印を付け替えます。</li>
+      <li><kbd>R</kbd>：現在slotを始点とする矢印を削除します。矢印は文境界を跨げません。</li>
+    </ul>
+
+    <h3>削除・履歴</h3>
+    <ul>
+      <li><kbd>x</kbd>：標識削除。<kbd>X</kbd>：現在選択中のT/V下線構造を1段削除。<kbd>U</kbd>：V下線groupそのものを解除。</li>
+      <li><kbd>u</kbd>：undo。<kbd>Ctrl-r</kbd>：redo。標識・境界・T・下線・二重slot・矢印・英文編集など文書内容の変更が対象です。</li>
+      <li><kbd>h</kbd>/<kbd>l</kbd>/<kbd>j</kbd>/<kbd>k</kbd>など、カーソル移動だけの操作は履歴に入りません。</li>
+      <li>aux の <kbd>a</kbd>→<kbd>u</kbd>→<kbd>x</kbd> を入力中の <kbd>u</kbd> はundoではなく標識入力として扱われます。</li>
+    </ul>
+
+    <h3>内部表現</h3>
+    <ul>
+      <li>「内部表現（JSON・リアルタイム）」には現在の文書構造を常時表示します。</li>
+      <li>存在しない標識・T・下線・境界・矢印などは、空値を並べず不要なキー自体を省略します。</li>
+      <li>下線の範囲はslot参照として保持され、Tの左右slotやV下線のslotも部分指定できます。</li>
+    </ul>
+
+    <p class="note">上部のボタンは、選択中のslotへ対応する標識を直接設定するための補助操作です。キーボード操作と同じ文書状態を編集します。</p>
+  </div>
+</div>
+
+<script>
+(() => {
+  const input = document.getElementById('input');
+  const sentence = document.getElementById('sentence');
+  const workspace = document.getElementById('workspace');
+  const groupLayer = document.getElementById('groupLayer');
+  const arrowLayer = document.getElementById('arrowLayer');
+  const modeBadge = document.getElementById('modeBadge');
+  const internalJson = document.getElementById('internalJson');
+
+  let mode = 'NORMAL';
+  let pendingKeys = '';
+  let pendingCursor = null;
+  let pendingSlot = null;
+  let pendingGroupId = null;
+  let pendingGroupSlot = null;
+  let numericPending = false;
+  let verbalEditingSide = null;
+  let verbalEditingBuffer = '';
+  let verbalEditingOriginal = '';
+  let cursor = 0;
+  let cursorSlot = null; // null | 'left' | 'right'
+  let tokens = [];
+  // 入力テキストの改行ごとに独立した文として扱う。tokenSentence[i] は token i の文番号。
+  let tokenSentence = [];
+  let sentenceRanges = []; // {index, text, start, end} / end は exclusive
+  // 各単語は標識スロットをただ1つ持つ。
+  // kind='single' なら text、kind='double' なら left/right を内容として使う。
+  // enabled=false の間も内容は保持し、表示だけを無効化する。
+  let workSlots = []; // {enabled, kind:'single'|'double', text, left, right}
+  let verbals = [];
+  let arrows = [];
+  let arrowDraft = null; // {word, slot} : ad または a の働きの標識
+
+  // gaps[i] は「単語 i-1 と i の間」。
+  // 0 は文頭、tokens.length は文末。入れ子のため複数記号を保持できる。
+  let gaps = [];
+  // gaps[i] は「位置 i の左側」の境界記号。
+  // i == tokens.length は文末ダミー位置の左、つまり文末境界。
+  let gapMode = false;
+  let gapCursor = 0; // 0..tokens.length の境界位置
+
+  // 同一文内の1つ以上の区間を1つの構造として束ねる下線グループ。
+  // segments が1区間なら通常の連続下線、2区間以上なら離れた下線を同一構造として扱う。
+  // 下線が直接保持・消費するのは slot 参照(startRef/endRef)だけ。
+  // start/end は描画・行折返し計算のために slot 参照から毎回派生する token 外接範囲であり、
+  // 構造の包含・所属・消費判定には使わない。
+  let groups = []; // {id, segments:[{startRef,endRef}], start,end,mark,linkColor,verbal}
+  let nextGroupId = 1;
+  // V選択: selecting=true の間は active 区間を h/l で伸縮。Vで区間を固定し、
+  // gap mode に入った後は h/l で飛ばし、もう一度Vで次区間を開始。Enterで全区間を確定。
+  let groupSelection = null; // {segments:[{from,to}], anchor, head, selecting}
+  let groupCursorId = null;   // 語群全体の働きの標識を選択中
+  let groupCursorSlot = null; // group T の 'left' / 'right'。通常groupでは null
+  let groupCursorTarget = null; // null | 'underline' | 'single' | 'left' | 'right'。表示カーソル対象は常に1つ
+
+  // Vim風 undo / redo は、文書内容を変更するすべての編集操作に適用する。
+  // u      : 直前の編集を取り消す
+  // Ctrl-r : 取り消した編集をやり直す
+  // h/l/j/k などのカーソル移動・モード移動は履歴に含めない。
+  let markUndoStack = [];
+  let markRedoStack = [];
+  let historyRestoring = false;
+
+  function cloneData(value){
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function makeWorkSlot(){
+    return {enabled:true, kind:'single', text:'', left:'', right:''};
+  }
+
+  function makeTSlot(text = ''){
+    return {enabled:true, kind:'single', text:text || '', left:'', right:''};
+  }
+
+  function makeTState(on = false, left = '', right = ''){
+    return {on, slots:{left:makeTSlot(left), right:makeTSlot(right)}};
+  }
+
+  function ensureTState(v){
+    if(!v) return null;
+    if(!v.slots){
+      v.slots = {left:makeTSlot(v.left || ''), right:makeTSlot(v.right || '')};
+      delete v.left;
+      delete v.right;
+    }
+    if(!v.slots.left) v.slots.left = makeTSlot();
+    if(!v.slots.right) v.slots.right = makeTSlot();
+    return v;
+  }
+
+  function tSlot(v, side){
+    v = ensureTState(v);
+    return v?.slots?.[side] || null;
+  }
+
+  function tSlotText(v, side){
+    return tSlot(v, side)?.text || '';
+  }
+
+  function setTSlotText(v, side, text){
+    const slot = tSlot(v, side);
+    if(slot) slot.text = text || '';
+  }
+
+  function ensureWorkSlot(index = cursor){
+    if(index < 0 || index >= tokens.length) return null;
+    if(!workSlots[index]) workSlots[index] = makeWorkSlot();
+    return workSlots[index];
+  }
+
+  function slotIsDouble(index = cursor){
+    return ensureWorkSlot(index)?.kind === 'double';
+  }
+
+  function slotContainsVisibleWork(index){
+    const slot = ensureWorkSlot(index);
+    if(!slot || !slot.enabled) return false;
+    return slot.kind === 'double'
+      ? Boolean(slot.left || slot.right)
+      : Boolean(slot.text);
+  }
+
+  function slotDisabledByT(index){
+    if(index < 0 || index >= tokens.length) return false;
+    if(verbals[index]?.on) return true;
+    return groupsForWord(index).some(g => ensureGroupVerbal(g).on);
+  }
+
+  function refOrderKey(ref){
+    // 構造包含判定用の論理順序。T左右は独立した位置として扱う。
+    if(ref?.group != null){
+      const g=groupById(ref.group);
+      if(!g) return 0;
+      const base=(ref.slot === 'left' ? g.start : g.end) * 100000;
+      const side=ref.slot === 'left' ? 30000 : ref.slot === 'right' ? 70000 : 50000;
+      return base + side + (g.id % 10000);
+    }
+    const side=ref?.slot === 'left' ? 20000 : ref?.slot === 'right' ? 80000 : 50000;
+    return (ref?.word ?? 0) * 100000 + side;
+  }
+
+  // slot 区間を画面上の token 外接範囲へ投影する描画専用ヘルパー。
+  // この値で group の構成要素・包含・消費を決めてはいけない。
+  function segmentRange(seg){
+    if(!seg) return null;
+    const a=refExtent(seg.startRef), b=refExtent(seg.endRef);
+    return {start:Math.min(a.start,b.start), end:Math.max(a.end,b.end)};
+  }
+
+  function groupSegments(g){
+    normalizeGroupRefs(g);
+    return g?.segments || [];
+  }
+
+  function refInsideSegment(ref, seg){
+    if(!ref || !seg) return false;
+    let a=refOrderKey(seg.startRef), b=refOrderKey(seg.endRef);
+    if(a>b) [a,b]=[b,a];
+    const x=refOrderKey(ref);
+    return x>=a && x<=b;
+  }
+
+  function refInsideGroup(ref, g){
+    if(!ref || !g) return false;
+    normalizeGroupRefs(g);
+    // 自分自身のT左右は、自分自身の内部には含めない。
+    if(ref.group === g.id) return false;
+    return g.segments.some(seg => refInsideSegment(ref, seg));
+  }
+
+  // token 自体を group の構成要素とはみなさない。
+  // token に属する intrinsic slot のどれかが消費されているかだけを見る。
+  function intrinsicWordRefs(index){
+    if(index < 0 || index >= tokens.length) return [];
+    const v=ensureVerbal(index);
+    const slot=ensureWorkSlot(index);
+    if(v?.on) return [{word:index,slot:'left'},{word:index,slot:'right'}];
+    if(slot?.kind === 'double') return [{word:index,slot:'left'},{word:index,slot:'right'}];
+    return [{word:index,slot:null}];
+  }
+
+  function refsInsideSegment(seg){
+    return selectionDisplayOrder().filter(ref => refInsideSegment(ref, seg));
+  }
+
+  function wordInsideGroup(index, g){
+    if(index < 0 || !g) return false;
+    normalizeGroupRefs(g);
+    return intrinsicWordRefs(index).some(ref => g.segments.some(seg => refInsideSegment(ref, seg)));
+  }
+
+  function disabledByContainingT(ref, exceptGroupId=null){
+    return groups.some(g => g.id !== exceptGroupId && ensureGroupVerbal(g).on && refInsideGroup(ref,g));
+  }
+
+  function refreshWorkSlotEnabled(){
+    for(let i=0; i<tokens.length; i++){
+      const slot=ensureWorkSlot(i);
+      slot.enabled = !verbals[i]?.on && !disabledByContainingT({word:i,slot:null});
+
+      const v=ensureVerbal(i);
+      if(v?.on){
+        tSlot(v,'left').enabled = !disabledByContainingT({word:i,slot:'left'});
+        tSlot(v,'right').enabled = !disabledByContainingT({word:i,slot:'right'});
+      }
+    }
+    for(const g of groups){
+      const gv=ensureGroupVerbal(g);
+      if(!gv.on) continue;
+      tSlot(gv,'left').enabled = !disabledByContainingT({group:g.id,slot:'left'}, g.id);
+      tSlot(gv,'right').enabled = !disabledByContainingT({group:g.id,slot:'right'}, g.id);
+    }
+  }
+
+  // 名前は互換性のため captureMarkState のままだが、実際には文書全体を保存する。
+  function captureMarkState(){
+    return {
+      text: input.value,
+      tokens: cloneData(tokens),
+      workSlots: cloneData(workSlots),
+      verbals: cloneData(verbals),
+      gaps: cloneData(gaps),
+      groups: cloneData(groups),
+      nextGroupId,
+      arrows: cloneData(arrows)
+    };
+  }
+
+  function markStateSignature(state){
+    return JSON.stringify(state);
+  }
+
+  function pushMarkUndo(before){
+    if(historyRestoring || !before) return;
+    const now = captureMarkState();
+    if(markStateSignature(before) === markStateSignature(now)) return;
+
+    const last = markUndoStack[markUndoStack.length - 1];
+    if(!last || markStateSignature(last) !== markStateSignature(before)){
+      markUndoStack.push(cloneData(before));
+      if(markUndoStack.length > 300) markUndoStack.shift();
+    }
+    markRedoStack = [];
+  }
+
+  function restoreMarkState(state){
+    if(!state) return;
+    historyRestoring = true;
+
+    input.value = state.text ?? '';
+    tokens = cloneData(state.tokens || []);
+    rebuildSentenceMeta();
+    workSlots = cloneData(state.workSlots || tokens.map(() => makeWorkSlot()));
+    verbals = cloneData(state.verbals || []);
+    verbals.forEach(ensureTState);
+    gaps = cloneData(state.gaps || []);
+    groups = cloneData(state.groups || []);
+    groups.forEach(g => { normalizeGroupRefs(g); ensureGroupVerbal(g); });
+    nextGroupId = state.nextGroupId || (groups.reduce((m,g) => Math.max(m, g.id || 0), 0) + 1);
+    arrows = cloneData(state.arrows || []);
+    arrowDraft = null;
+
+    cursor = Math.max(0, Math.min(cursor, tokens.length));
+    gapCursor = Math.max(0, Math.min(gapCursor, tokens.length));
+    if(groupCursorId !== null && !groups.some(g => g.id === groupCursorId)){
+      clearGroupCursor();
+    }
+    if(groupCursorId !== null){
+      const cg = groupById(groupCursorId);
+      if(ensureGroupVerbal(cg)?.on){
+        groupCursorTarget = groupCursorSlot === 'right' ? 'right' : 'left';
+      }else if(groupCursorTarget !== 'single' && groupCursorTarget !== 'underline'){
+        groupCursorTarget = cg?.mark ? 'single' : 'underline';
+      }
+    }
+    if(cursor < tokens.length){
+      if(cursorSlot && !verbals[cursor]?.on && !slotIsDouble(cursor)) cursorSlot = null;
+    }else{
+      cursorSlot = null;
+    }
+
+    pendingKeys = '';
+    pendingCursor = null;
+    pendingSlot = null;
+    pendingGroupId = null;
+    pendingGroupSlot = null;
+    numericPending = false;
+    verbalEditingSide = null;
+    verbalEditingBuffer = '';
+    verbalEditingOriginal = '';
+    groupSelection = null;
+
+    refreshWorkSlotEnabled();
+    cleanupArrows();
+    render();
+    historyRestoring = false;
+  }
+
+  function undoMarkEdit(){
+    if(!markUndoStack.length) return;
+    const current = captureMarkState();
+    const previous = markUndoStack.pop();
+    markRedoStack.push(cloneData(current));
+    restoreMarkState(previous);
+  }
+
+  function redoMarkEdit(){
+    if(!markRedoStack.length) return;
+    const current = captureMarkState();
+    const next = markRedoStack.pop();
+    markUndoStack.push(cloneData(current));
+    restoreMarkState(next);
+  }
+
+  function parseSentences(text){
+    const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
+    const flat = [];
+    const tokenSentence = [];
+    const ranges = [];
+    for(let si=0; si<lines.length; si++){
+      const line = lines[si];
+      const words = line.trim() ? line.trim().split(/\s+/) : [];
+      const start = flat.length;
+      for(const word of words){
+        flat.push(word);
+        tokenSentence.push(si);
+      }
+      ranges.push({index:si, text:line, start, end:flat.length});
+    }
+    return {tokens:flat, tokenSentence, ranges};
+  }
+
+  function rebuildSentenceMeta(){
+    const parsed = parseSentences(input.value);
+    tokenSentence = parsed.tokenSentence;
+    sentenceRanges = parsed.ranges;
+  }
+
+  function sentenceOfWord(index){
+    if(index < 0 || index >= tokenSentence.length) return -1;
+    return tokenSentence[index];
+  }
+
+  function sentenceOfRef(ref){
+    if(!ref) return -1;
+    if(ref.group != null){
+      const g = groupById(ref.group);
+      return g ? sentenceOfRef(groupSegments(g)[0]?.startRef) : -1;
+    }
+    return sentenceOfWord(ref.word);
+  }
+
+  function sameSentenceRefs(a,b){
+    const sa=sentenceOfRef(a), sb=sentenceOfRef(b);
+    return sa >= 0 && sa === sb;
+  }
+
+  function syncFromInput(){
+    const parsed = parseSentences(input.value);
+    const next = parsed.tokens;
+    const oldWorkSlots = workSlots.map(v => v ? {...v} : null);
+    const oldVerbals = verbals.map(v => v ? {...v} : null);
+    const oldGaps = gaps.slice();
+    tokens = next;
+    tokenSentence = parsed.tokenSentence;
+    sentenceRanges = parsed.ranges;
+    workSlots = next.map((_, i) => oldWorkSlots[i] ? oldWorkSlots[i] : makeWorkSlot());
+    verbals = next.map((_, i) => oldVerbals[i] ? oldVerbals[i] : makeTState(false));
+    verbals.forEach(ensureTState);
+    gaps = Array.from({length: next.length + 1}, (_, i) => oldGaps[i] ?? '');
+    cursor = Math.max(0, Math.min(cursor, tokens.length));
+    gapCursor = Math.max(0, Math.min(gapCursor, tokens.length));
+    groups = groups
+      .map(g => ({...g, verbal:g.verbal || makeTState(false)}))
+      .map(normalizeGroupRefs)
+      .filter(g => g.segments.length && g.segments.every(seg => {
+        const a=sentenceOfRef(seg.startRef), b=sentenceOfRef(seg.endRef);
+        return a >= 0 && a === b;
+      }));
+    if(groupCursorId !== null && !groups.some(g => g.id === groupCursorId)){
+      clearGroupCursor();
+    }
+    refreshWorkSlotEnabled();
+    cleanupArrows();
+    render();
+  }
+
+  function groupsForWord(index){
+    if(index < 0 || index >= tokens.length) return [];
+    // 離れた区間の間にある単語は、そのgroupには所属しない。
+    return groups
+      .filter(g => wordInsideGroup(index, g))
+      .sort((a,b) => {
+        const as = groupLogicalSpan(a);
+        const bs = groupLogicalSpan(b);
+        return as - bs || b.id - a.id;
+      });
+  }
+
+  function groupForWord(index){
+    return groupsForWord(index)[0] || null;
+  }
+
+  function groupTForWord(index){
+    return groupsForWord(index).find(g => ensureGroupVerbal(g).on) || null;
+  }
+
+  // 交差・包含する下線を同じ高さに描かないための段番号。
+  // 短い（内側の）範囲から 0,1,2... と積み上げる。
+  function groupLevelMap(){
+    const ordered = groups.slice().sort((a,b) =>
+      groupLogicalSpan(a) - groupLogicalSpan(b) || a.id - b.id
+    );
+    const levels = new Map();
+    const overlap = (a,b) => groupSegments(a).some(sa => {
+      let a1=refOrderKey(sa.startRef), a2=refOrderKey(sa.endRef);
+      if(a1>a2) [a1,a2]=[a2,a1];
+      return groupSegments(b).some(sb => {
+        let b1=refOrderKey(sb.startRef), b2=refOrderKey(sb.endRef);
+        if(b1>b2) [b1,b2]=[b2,b1];
+        return !(a2 < b1 || b2 < a1);
+      });
+    });
+
+    for(const g of ordered){
+      let level = 0;
+      while(ordered.some(other =>
+        other !== g
+        && levels.has(other.id)
+        && levels.get(other.id) === level
+        && overlap(g, other)
+      )) level++;
+      levels.set(g.id, level);
+    }
+    return levels;
+  }
+
+  function groupById(id){
+    const g = groups.find(g => g.id === id) || null;
+    return g ? normalizeGroupRefs(g) : null;
+  }
+
+
+  function setGroupCursor(id, target = null){
+    const g = groupById(id);
+    if(!g){
+      groupCursorId = null;
+      groupCursorSlot = null;
+      groupCursorTarget = null;
+      return false;
+    }
+    const gv = ensureGroupVerbal(g);
+    let resolved = target;
+    if(gv?.on){
+      resolved = resolved === 'right' ? 'right' : 'left';
+      groupCursorSlot = resolved;
+    }else{
+      if(resolved !== 'single' && resolved !== 'underline'){
+        resolved = g.mark ? 'single' : 'underline';
+      }
+      groupCursorSlot = null;
+    }
+    groupCursorId = g.id;
+    groupCursorTarget = resolved;
+    cursor = g.start;
+    cursorSlot = null;
+    return true;
+  }
+
+  function clearGroupCursor(){
+    groupCursorId = null;
+    groupCursorSlot = null;
+    groupCursorTarget = null;
+  }
+
+  function ensureGroupVerbal(g){
+    if(!g) return null;
+    if(!g.verbal) g.verbal = makeTState(false);
+    return ensureTState(g.verbal);
+  }
+
+  function wordDisplayDisabledByGroupT(index = cursor){
+    return Boolean(groupTForWord(index));
+  }
+
+  function groupTSlotForWord(index, preferredSlot = null){
+    const g = groupTForWord(index);
+    if(!g || !ensureGroupVerbal(g).on) return null;
+    if(preferredSlot === 'left' || preferredSlot === 'right') return preferredSlot;
+
+    // 左端から入ったときは左、右端から入ったときは右。
+    // 内部の単語を直接クリックした場合は、語群の中央を境に近い側を選ぶ。
+    const middle = (g.start + g.end) / 2;
+    return index <= middle ? 'left' : 'right';
+  }
+
+  function selectGroupTForWord(index, preferredSlot = null){
+    const g = groupTForWord(index);
+    if(!g || !ensureGroupVerbal(g).on) return false;
+    groupCursorId = g.id;
+    groupCursorSlot = groupTSlotForWord(index, preferredSlot);
+    groupCursorTarget = groupCursorSlot;
+    cursor = g.start;
+    cursorSlot = null;
+    return true;
+  }
+
+  function makeStructureEndpoint(ref){
+    // endpoint は常に slot を指す。通常の1スロットも port:'single' として明示する。
+    if(ref?.group != null){
+      return {structure:ref.group, port:ref.slot || 'single'};
+    }
+    return {token:ref?.word ?? 0, port:ref?.slot || 'single'};
+  }
+
+  function serializeSlot(slot){
+    slot = slot || makeWorkSlot();
+    const out = {enabled: Boolean(slot.enabled)};
+
+    // 無効なスロットは存在だけを表し、内部の種類・内容は表示用JSONへ出さない。
+    if(!slot.enabled) return out;
+
+    out.kind = slot.kind;
+    if(slot.kind === 'double'){
+      out.text = [slot.left || '', slot.right || ''];
+    }else if(slot.text){
+      out.text = slot.text;
+    }
+    return out;
+  }
+
+  function internalRepresentation(){
+    // 改行ごとに独立した文書単位として出力する。
+    // token / range の番号は各文の内部で 0 から振り直す。
+    const document = {
+      text: input.value,
+      sentences: []
+    };
+
+    function localWord(globalWord, range){
+      return globalWord - range.start;
+    }
+
+    function localEndpoint(ref, range){
+      // 構造端点は token/structure 本体ではなく、その slot を必ず指す。
+      if(ref?.group != null){
+        return {structure:ref.group, port:ref.slot || 'single'};
+      }
+      return {token:localWord(ref.word, range), port:ref?.slot || 'single'};
+    }
+
+    for(const range of sentenceRanges){
+      const sentenceDoc = {
+        text: range.text,
+        tokens: []
+      };
+
+      for(let index=range.start; index<range.end; index++){
+        sentenceDoc.tokens.push({
+          text: tokens[index],
+          slot: serializeSlot(ensureWorkSlot(index))
+        });
+      }
+
+      const structures = [];
+      for(let index=range.start; index<range.end; index++){
+        const verbal = verbals[index];
+        if(!verbal?.on) continue;
+        const local = localWord(index, range);
+        structures.push({
+          kind:'verbal',
+          range:[{token:local,port:'single'},{token:local,port:'single'}],
+          form:'T',
+          slots:{
+            left:serializeSlot(tSlot(verbal,'left')),
+            right:serializeSlot(tSlot(verbal,'right'))
+          }
+        });
+      }
+
+      for(const g of groups){
+        if(sentenceOfRef(groupSegments(g)[0]?.startRef) !== range.index) continue;
+        const gv=ensureGroupVerbal(g);
+        const ng=normalizeGroupRefs(g);
+        const structure={
+          id:g.id,
+          kind:'group',
+          ranges:ng.segments.map(seg => [
+            localEndpoint(seg.startRef, range),
+            localEndpoint(seg.endRef, range)
+          ]),
+          form:gv.on ? 'T' : 'underline'
+        };
+        if(ng.segments.length > 1 && g.linkColor) structure.linkColor=g.linkColor;
+        if(gv.on){
+          structure.slots={
+            left:serializeSlot(tSlot(gv,'left')),
+            right:serializeSlot(tSlot(gv,'right'))
+          };
+        }else if(g.mark){
+          structure.marks=[g.mark];
+        }
+        structures.push(structure);
+      }
+      if(structures.length) sentenceDoc.structures=structures;
+
+      const boundaries={};
+      for(let globalGap=range.start; globalGap<=range.end; globalGap++){
+        const symbols=gaps[globalGap] || '';
+        if(symbols) boundaries[globalGap-range.start]=symbols;
+      }
+      if(Object.keys(boundaries).length) sentenceDoc.boundaries=boundaries;
+
+      const sentenceArrows=arrows.filter(a => sentenceOfRef(a.from)===range.index && sentenceOfRef(a.to)===range.index);
+      if(sentenceArrows.length){
+        sentenceDoc.arrows=sentenceArrows.map(a => ({
+          from:localEndpoint(a.from, range),
+          to:localEndpoint(a.to, range)
+        }));
+      }
+
+      document.sentences.push(sentenceDoc);
+    }
+    return document;
+  }
+
+  function updateInternalJson(){
+    if(!internalJson) return;
+    internalJson.value = JSON.stringify(internalRepresentation(), null, 2);
+  }
+
+  function cloneRef(ref){
+    return ref ? {...ref} : null;
+  }
+
+  function selectionDisplayOrder(){
+    const list = [];
+    for(let i=0; i<tokens.length; i++){
+      const v = ensureVerbal(i);
+      const slot = ensureWorkSlot(i);
+      if(v?.on){
+        if(tSlot(v,'left').enabled) list.push({word:i, slot:'left'});
+        if(tSlot(v,'right').enabled) list.push({word:i, slot:'right'});
+      }else if(slot?.enabled && slot.kind === 'double'){
+        list.push({word:i, slot:'left'}, {word:i, slot:'right'});
+      }else if(slot?.enabled){
+        list.push({word:i, slot:null});
+      }
+
+      const ending = groups.filter(g => g.end === i).sort((a,b) => {
+        const as=a.end-a.start, bs=b.end-b.start;
+        return as-bs || a.id-b.id;
+      });
+      for(const g of ending){
+        const gv = ensureGroupVerbal(g);
+        if(gv.on){
+          if(tSlot(gv,'left').enabled) list.push({group:g.id, slot:'left'});
+          if(tSlot(gv,'right').enabled) list.push({group:g.id, slot:'right'});
+        }
+        else list.push({group:g.id, slot:null});
+      }
+    }
+    return list;
+  }
+
+  function refExtent(ref){
+    if(!ref) return {start:0,end:0};
+    if(ref.group != null){
+      const g=groupById(ref.group);
+      if(!g) return {start:0,end:0};
+      if(ref.slot === 'left') return {start:g.start,end:g.start};
+      if(ref.slot === 'right') return {start:g.end,end:g.end};
+      return {start:g.start,end:g.end};
+    }
+    return {start:ref.word,end:ref.word};
+  }
+
+  function normalizedSelectionSegment(from, to){
+    const order=selectionDisplayOrder();
+    let ai=order.findIndex(x=>sameDisplayRef(x,from));
+    let hi=order.findIndex(x=>sameDisplayRef(x,to));
+    if(ai<0 || hi<0) return null;
+    if(ai>hi) [ai,hi]=[hi,ai];
+    const a=cloneRef(order[ai]), b=cloneRef(order[hi]);
+    // 選択区間の正本は slot 参照と display-order index のみ。
+    return {from:a,to:b,fromIndex:ai,toIndex:hi,count:hi-ai+1};
+  }
+
+  function selectionSegments(includeActive=true){
+    if(!groupSelection) return [];
+    const out=(groupSelection.segments || []).map(x => normalizedSelectionSegment(x.from,x.to)).filter(Boolean);
+    if(includeActive && groupSelection.selecting && groupSelection.anchor && groupSelection.head){
+      const active=normalizedSelectionSegment(groupSelection.anchor,groupSelection.head);
+      if(active) out.push(active);
+    }
+    return out;
+  }
+
+  function refInsideNormalizedSegment(ref, seg){
+    if(!ref || !seg) return false;
+    let a=refOrderKey(seg.from), b=refOrderKey(seg.to);
+    if(a>b) [a,b]=[b,a];
+    const x=refOrderKey(ref);
+    return x>=a && x<=b;
+  }
+
+  function refInFixedGroupSelection(ref){
+    if(!ref || !groupSelection) return false;
+    return (groupSelection.segments || [])
+      .map(x => normalizedSelectionSegment(x.from,x.to))
+      .filter(Boolean)
+      .some(seg => refInsideNormalizedSegment(ref,seg));
+  }
+
+  function refInActiveGroupSelection(ref){
+    if(!ref || !groupSelection?.selecting || !groupSelection.anchor || !groupSelection.head) return false;
+    const seg=normalizedSelectionSegment(groupSelection.anchor,groupSelection.head);
+    return Boolean(seg && refInsideNormalizedSegment(ref,seg));
+  }
+
+  function refInGroupSelection(ref){
+    return refInFixedGroupSelection(ref) || refInActiveGroupSelection(ref);
+  }
+
+  function refIsGroupSelectionCursor(ref){
+    if(!ref || !groupSelection) return false;
+    return sameDisplayRef(ref, currentDisplayRef());
+  }
+
+  function wordInFixedGroupSelection(index){
+    return intrinsicWordRefs(index).some(ref => refInFixedGroupSelection(ref));
+  }
+
+  function wordInActiveGroupSelection(index){
+    return intrinsicWordRefs(index).some(ref => refInActiveGroupSelection(ref));
+  }
+
+  function wordInGroupSelection(index){
+    return wordInFixedGroupSelection(index) || wordInActiveGroupSelection(index);
+  }
+
+  function normalizeGroupRefs(g){
+    if(!g) return g;
+    if(!Array.isArray(g.segments) || !g.segments.length){
+      // group の正本には必ず slot 端点が必要。token 範囲からの復元はしない。
+      if(g.startRef && g.endRef){
+        g.segments=[{startRef:cloneRef(g.startRef), endRef:cloneRef(g.endRef)}];
+      }else{
+        return g;
+      }
+    }
+    g.segments = g.segments.map(seg => {
+      const startRef=cloneRef(seg.startRef);
+      const endRef=cloneRef(seg.endRef);
+      let a=startRef,b=endRef;
+      if(refOrderKey(a)>refOrderKey(b)) [a,b]=[b,a];
+      return {startRef:a,endRef:b};
+    }).sort((a,b) => refOrderKey(a.startRef)-refOrderKey(b.startRef));
+
+    // token 外接範囲は描画用キャッシュとして slot 参照から派生させる。
+    const extents=g.segments.map(segmentRange);
+    g.start=Math.min(...extents.map(x=>x.start));
+    g.end=Math.max(...extents.map(x=>x.end));
+    g.startRef=cloneRef(g.segments[0].startRef);
+    g.endRef=cloneRef(g.segments[g.segments.length-1].endRef);
+    return g;
+  }
+
+  function refWord(ref){
+    if(ref?.group != null) return groupById(ref.group)?.start ?? -1;
+    return ref?.word ?? -1;
+  }
+
+  function render(){
+    // enabled はT包含関係から毎回再計算する。内容そのものは決して捨てない。
+    refreshWorkSlotEnabled();
+    sentence.innerHTML = '';
+
+    if(tokens.length === 0){
+      sentence.innerHTML = '<span style="color:#9ca3af">英文を入力してください。</span>';
+      arrowLayer.innerHTML = '';
+      if(arrowDraft){
+        modeBadge.textContent = 'ARROW TARGET';
+        modeBadge.classList.add('pending');
+      }else if(gapMode){
+        modeBadge.textContent = 'BORDER';
+        modeBadge.classList.add('pending');
+      }else if(verbalEditingSide){
+        modeBadge.textContent = `T-${verbalEditingSide === 'left' ? 'LEFT' : 'RIGHT'} INPUT`;
+        modeBadge.classList.add('pending');
+      }else{
+        modeBadge.textContent = pendingKeys ? `${mode}  ${pendingKeys}…` : mode;
+        modeBadge.classList.toggle('pending', Boolean(pendingKeys));
+      }
+      updateInternalJson();
+      return;
+    }
+
+    function appendGap(index){
+      const gap = document.createElement('div');
+      const value = gaps[index] || '';
+      gap.className = 'gap-marker'
+        + (value ? ' has-symbol' : '')
+        + (gapMode && gapCursor === index ? ' gap-cursor' : '');
+      gap.dataset.gapIndex = String(index);
+      gap.textContent = value;
+      gap.addEventListener('click', (ev) => {
+        if(!gapMode) return;
+        ev.stopPropagation();
+        gapCursor = index;
+        render();
+        workspace.focus();
+      });
+      sentence.appendChild(gap);
+    }
+
+    function appendSentenceBreak(empty = false){
+      const br = document.createElement('div');
+      br.className = 'sentence-break' + (empty ? ' empty-line' : '');
+      sentence.appendChild(br);
+    }
+
+    // 先頭に空行がある場合もその行数を反映する。
+    let previousSentence = tokens.length ? sentenceOfWord(0) : 0;
+    for(let si=0; si<previousSentence; si++) appendSentenceBreak(true);
+
+    appendGap(0);
+
+    tokens.forEach((token, i) => {
+      const si = sentenceOfWord(i);
+      if(i > 0 && si !== sentenceOfWord(i-1)){
+        const prev = sentenceOfWord(i-1);
+        appendSentenceBreak(false);
+        for(let missing=prev+1; missing<si; missing++) appendSentenceBreak(true);
+      }
+      const el = document.createElement('div');
+      const verbal = verbals[i];
+      const wordGroups = groupsForWord(i);
+      const group = wordGroups[0] || null;
+      const groupVerbalOn = Boolean(groupTForWord(i));
+      el.className = 'word'
+        + (verbal?.on ? ' has-verbal' : '')
+        + (slotIsDouble(i) ? ' has-dual' : '')
+        + (group ? ' group-member' : '')
+        + (groupVerbalOn ? ' group-verbal-active' : '')
+        + '';
+      el.dataset.index = i;
+      if(wordGroups.length){
+        const levels = groupLevelMap();
+        const maxLevel = Math.max(...wordGroups.map(g => levels.get(g.id) || 0));
+        // 絶対配置の下線・標識/Tが次の行と衝突しないための余白。
+        el.style.paddingBottom = `${27 * (maxLevel + 1)}px`;
+      }
+
+      const tokenEl = document.createElement('div');
+      tokenEl.className = 'token';
+      tokenEl.textContent = token;
+      tokenEl.dataset.tokenIndex = String(i);
+
+      const markEl = document.createElement('div');
+      const isPendingHere = pendingKeys
+        && pendingGroupId === null
+        && pendingCursor === i
+        && pendingSlot === null;
+      const slot = ensureWorkSlot(i);
+      const shownMark = isPendingHere ? pendingKeys : (slot.enabled && slot.kind === 'single' ? (slot.text || '') : '');
+      const isNumberMark = /^(?:\([1-5]\)|-\([3-5]\))$/.test(shownMark);
+      const isMarkCursor = i === cursor
+        && mode === 'NORMAL'
+        && !gapMode
+        && groupCursorId === null
+        && cursorSlot === null;
+      markEl.className = 'mark'
+        + (isPendingHere ? ' pending-mark' : '')
+        + (isNumberMark ? ' number-mark' : '')
+        + (refInActiveGroupSelection({word:i, slot:null}) ? ' slot-group-selecting-active' : '')
+        + (refInFixedGroupSelection({word:i, slot:null}) ? ' slot-group-selecting-fixed' : '')
+        + (refIsGroupSelectionCursor({word:i, slot:null}) ? ' slot-group-selection-cursor' : '')
+        + (isMarkCursor && !groupSelection ? ' mark-cursor' : '');
+      markEl.textContent = shownMark;
+      markEl.dataset.workWord = String(i);
+      markEl.dataset.workSlot = 'single';
+      applySlotGeometry(markEl, {word:i, slot:null});
+      if(arrowDraft && arrowDraft.word === i && arrowDraft.slot === null){
+        markEl.classList.add('arrow-source');
+      }
+
+      el.append(tokenEl, markEl);
+
+      const dual = ensureWorkSlot(i);
+      if(dual?.enabled && dual.kind === 'double' && !verbal?.on){
+        const dualEl = document.createElement('div');
+        dualEl.className = 'dual-work';
+
+        const dleft = document.createElement('div');
+        const leftPending = pendingKeys && pendingCursor === i && pendingSlot === 'left';
+        const leftShown = leftPending ? pendingKeys : (dual.left || '');
+        dleft.className = 'dual-left'
+          + (refInActiveGroupSelection({word:i, slot:'left'}) ? ' slot-group-selecting-active' : '')
+          + (refInFixedGroupSelection({word:i, slot:'left'}) ? ' slot-group-selecting-fixed' : '')
+          + (refIsGroupSelectionCursor({word:i, slot:'left'}) ? ' slot-group-selection-cursor' : '')
+          + (i === cursor && cursorSlot === 'left' && mode === 'NORMAL'
+             && !gapMode && !groupSelection && groupCursorId === null ? ' dual-slot-cursor' : '')
+          + (leftPending ? ' pending-mark' : '');
+        dleft.textContent = leftShown;
+        dleft.dataset.workWord = String(i);
+        dleft.dataset.workSlot = 'left';
+        applySlotGeometry(dleft, {word:i, slot:'left'});
+        if(arrowDraft && arrowDraft.word === i && arrowDraft.slot === 'left'){
+          dleft.classList.add('arrow-source');
+        }
+
+        const dright = document.createElement('div');
+        const rightPending = pendingKeys && pendingCursor === i && pendingSlot === 'right';
+        const rightShown = rightPending ? pendingKeys : (dual.right || '');
+        dright.className = 'dual-right'
+          + (refInActiveGroupSelection({word:i, slot:'right'}) ? ' slot-group-selecting-active' : '')
+          + (refInFixedGroupSelection({word:i, slot:'right'}) ? ' slot-group-selecting-fixed' : '')
+          + (refIsGroupSelectionCursor({word:i, slot:'right'}) ? ' slot-group-selection-cursor' : '')
+          + (i === cursor && cursorSlot === 'right' && mode === 'NORMAL'
+             && !gapMode && !groupSelection && groupCursorId === null ? ' dual-slot-cursor' : '')
+          + (rightPending ? ' pending-mark' : '');
+        dright.textContent = rightShown;
+        dright.dataset.workWord = String(i);
+        dright.dataset.workSlot = 'right';
+        applySlotGeometry(dright, {word:i, slot:'right'});
+        if(arrowDraft && arrowDraft.word === i && arrowDraft.slot === 'right'){
+          dright.classList.add('arrow-source');
+        }
+
+        dleft.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          cursor = i;
+          cursorSlot = 'left';
+          gapMode = false;
+          clearGroupCursor();
+          groupSelection = null;
+          render();
+          workspace.focus();
+        });
+        dright.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          cursor = i;
+          cursorSlot = 'right';
+          gapMode = false;
+          clearGroupCursor();
+          groupSelection = null;
+          render();
+          workspace.focus();
+        });
+
+        dualEl.append(dleft, dright);
+        el.appendChild(dualEl);
+      }
+
+      if(verbal?.on){
+        const verbalEl = document.createElement('div');
+        verbalEl.className = 'verbal';
+
+        const left = document.createElement('div');
+        const leftEditing = i === cursor && verbalEditingSide === 'left';
+        left.className = 'verbal-left'
+          + ((!tSlotText(verbal, 'left') && !leftEditing) ? ' verbal-slot-empty' : '')
+          + (leftEditing ? ' verbal-editing' : '')
+          + (refInActiveGroupSelection({word:i, slot:'left'}) ? ' slot-group-selecting-active' : '')
+          + (refInFixedGroupSelection({word:i, slot:'left'}) ? ' slot-group-selecting-fixed' : '')
+          + (refIsGroupSelectionCursor({word:i, slot:'left'}) ? ' slot-group-selection-cursor' : '')
+          + (i === cursor && cursorSlot === 'left' && mode === 'NORMAL' && !gapMode && !groupSelection && groupCursorId === null ? ' verbal-slot-cursor' : '')
+          + (pendingKeys && pendingCursor === i && pendingSlot === 'left' ? ' pending-mark' : '');
+        const leftShown = leftEditing
+          ? (verbalEditingBuffer || '左…')
+          : (pendingKeys && pendingCursor === i && pendingSlot === 'left' ? pendingKeys : (tSlotText(verbal, 'left')));
+        left.textContent = leftShown;
+        left.dataset.workWord = String(i);
+        left.dataset.workSlot = 'left';
+        applySlotGeometry(left, {word:i, slot:'left'});
+        if(!tSlot(verbal,'left').enabled) left.style.visibility='hidden';
+        if(arrowDraft && arrowDraft.word === i && arrowDraft.slot === 'left'){
+          left.classList.add('arrow-source');
+        }
+        if(/^(?:\([1-5]\)|-\([3-5]\))$/.test(leftShown)) left.classList.add('verbal-number-mark');
+
+        const right = document.createElement('div');
+        const rightEditing = i === cursor && verbalEditingSide === 'right';
+        right.className = 'verbal-right'
+          + ((!tSlotText(verbal, 'right') && !rightEditing) ? ' verbal-slot-empty' : '')
+          + (rightEditing ? ' verbal-editing' : '')
+          + (refInActiveGroupSelection({word:i, slot:'right'}) ? ' slot-group-selecting-active' : '')
+          + (refInFixedGroupSelection({word:i, slot:'right'}) ? ' slot-group-selecting-fixed' : '')
+          + (refIsGroupSelectionCursor({word:i, slot:'right'}) ? ' slot-group-selection-cursor' : '')
+          + (i === cursor && cursorSlot === 'right' && mode === 'NORMAL' && !gapMode && !groupSelection && groupCursorId === null ? ' verbal-slot-cursor' : '')
+          + (pendingKeys && pendingCursor === i && pendingSlot === 'right' ? ' pending-mark' : '');
+        const rightShown = rightEditing
+          ? (verbalEditingBuffer || '右…')
+          : (pendingKeys && pendingCursor === i && pendingSlot === 'right' ? pendingKeys : (tSlotText(verbal, 'right')));
+        right.textContent = rightShown;
+        right.dataset.workWord = String(i);
+        right.dataset.workSlot = 'right';
+        applySlotGeometry(right, {word:i, slot:'right'});
+        if(!tSlot(verbal,'right').enabled) right.style.visibility='hidden';
+        if(arrowDraft && arrowDraft.word === i && arrowDraft.slot === 'right'){
+          right.classList.add('arrow-source');
+        }
+        if(/^(?:\([1-5]\)|-\([3-5]\))$/.test(rightShown)) right.classList.add('verbal-number-mark');
+
+        left.style.pointerEvents = 'auto';
+        right.style.pointerEvents = 'auto';
+        left.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          cursor = i;
+          cursorSlot = 'left';
+          gapMode = false;
+          clearGroupCursor();
+              setMode('NORMAL');
+          render();
+        });
+        right.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          cursor = i;
+          cursorSlot = 'right';
+          gapMode = false;
+          clearGroupCursor();
+              setMode('NORMAL');
+          render();
+        });
+
+        const top = document.createElement('div');
+        top.className = 'verbal-top';
+
+        const stem = document.createElement('div');
+        stem.className = 'verbal-stem';
+
+        verbalEl.append(top, stem, left, right);
+        el.appendChild(verbalEl);
+      }
+
+      el.addEventListener('click', () => {
+        gapMode = false;
+        groupSelection = null;
+
+        if(!selectGroupTForWord(i)){
+          cursor = i;
+          cursorSlot = verbals[i]?.on
+            ? 'left'
+            : (slotIsDouble(i) ? 'left' : null);
+          clearGroupCursor();
+        }
+
+        setMode('NORMAL');
+        workspace.focus();
+        render();
+      });
+
+      sentence.appendChild(el);
+      appendGap(i + 1);
+    });
+
+    // 末尾の改行・空行も構造図へ反映する。
+    if(sentenceRanges.length > 1){
+      const lastTokenSentence = tokens.length ? sentenceOfWord(tokens.length-1) : -1;
+      for(let si=Math.max(0,lastTokenSentence+1); si<sentenceRanges.length; si++) appendSentenceBreak(si < sentenceRanges.length-1 || sentenceRanges[si].text === '');
+    }
+
+    // 文末境界を入力するための、幅の小さいダミー位置。
+    const dummy = document.createElement('div');
+    dummy.className = 'word dummy-word'
+      + (cursor === tokens.length && mode === 'NORMAL' && !gapMode && groupCursorId === null ? ' cursor' : '');
+    dummy.dataset.index = String(tokens.length);
+    dummy.dataset.dummy = 'true';
+
+    const dummyToken = document.createElement('div');
+    dummyToken.className = 'token';
+    dummyToken.textContent = '';
+    dummy.appendChild(dummyToken);
+
+    dummy.addEventListener('click', () => {
+      cursor = tokens.length;
+      cursorSlot = null;
+      gapMode = false;
+      clearGroupCursor();
+      groupSelection = null;
+      arrowDraft = null;
+      render();
+      workspace.focus();
+    });
+    sentence.appendChild(dummy);
+
+    if(groupSelection){
+      const segs=selectionSegments(true);
+      const modeText=groupSelection.selecting ? 'GROUP SELECT' : 'GROUP GAP';
+      modeBadge.textContent = `${modeText}  ${segs.length}区間`;
+      modeBadge.classList.add('pending');
+    }else if(arrowDraft){
+      modeBadge.textContent = 'ARROW TARGET';
+      modeBadge.classList.add('pending');
+    }else if(gapMode){
+      modeBadge.textContent = 'BORDER';
+      modeBadge.classList.add('pending');
+    }else if(verbalEditingSide){
+      modeBadge.textContent = `T-${verbalEditingSide === 'left' ? 'LEFT' : 'RIGHT'} INPUT`;
+      modeBadge.classList.add('pending');
+    }else if(numericPending){
+      modeBadge.textContent = `${mode}  -…`;
+      modeBadge.classList.add('pending');
+    }else{
+      modeBadge.textContent = pendingKeys ? `${mode}  ${pendingKeys}…` : mode;
+      modeBadge.classList.toggle('pending', Boolean(pendingKeys));
+    }
+
+    updateInternalJson();
+
+    requestAnimationFrame(() => {
+      drawGroups();
+      drawArrows();
+    });
+  }
+
+  function groupRect(el){
+    const r = el.getBoundingClientRect();
+    const w = workspace.getBoundingClientRect();
+    return {
+      left:r.left - w.left + workspace.scrollLeft,
+      right:r.right - w.left + workspace.scrollLeft,
+      top:r.top - w.top + workspace.scrollTop,
+      bottom:r.bottom - w.top + workspace.scrollTop
+    };
+  }
+
+  function wordHasIndividualWork(index){
+    if(index < 0 || index >= tokens.length) return false;
+    if(verbals[index]?.on) return true;
+    return slotContainsVisibleWork(index);
+  }
+
+  function refHasActualIndividualWork(ref){
+    if(!ref || ref.group != null) return false;
+    const i=ref.word;
+    if(i < 0 || i >= tokens.length) return false;
+    const v=ensureVerbal(i);
+    if(v?.on) return ref.slot === 'left' || ref.slot === 'right';
+    const slot=ensureWorkSlot(i);
+    if(!slot?.enabled) return false;
+    if(slot.kind === 'double') return Boolean(slot[ref.slot] || '');
+    return ref.slot == null && Boolean(slot.text);
+  }
+
+  function groupHasActualIndividualWork(g){
+    if(!g) return false;
+    // 「group が消費した slot」の中だけを見る。token 全体へ拡張しない。
+    return groupSegments(g).some(seg => refsInsideSegment(seg).some(refHasActualIndividualWork));
+  }
+
+  function enterFromHorizontal(index, preferredSlot = null){
+    if(index < 0 || index > tokens.length) return;
+
+    if(index === tokens.length){
+      setCursorPosition(index, null);
+      return;
+    }
+
+    const g = groupForWord(index);
+
+    // 下線全体がTなら、従来どおりT左右へ入る。
+    if(g && ensureGroupVerbal(g).on){
+      setCursorPosition(index, preferredSlot);
+      return;
+    }
+
+    // 下線内に個別標識が1つも無い場合、
+    // 左右移動では内側の空標識位置へ入らず、下線自身の標識へ入る。
+    if(g && !groupHasActualIndividualWork(g)){
+      setGroupCursor(g.id, 'underline');
+      render();
+      return;
+    }
+
+    setCursorPosition(index, preferredSlot);
+  }
+
+  function workBaselineBottomForWord(index){
+    // TならT表示全体、通常語ならmark行のbottomを返す。
+    // markが空でも、同じ行高を得るためDOMのmark要素自体を基準にできる。
+    if(verbals[index]?.on){
+      const el = sentence.querySelector(`.word[data-index="${index}"] .verbal`);
+      if(el) return groupRect(el).bottom;
+    }
+    if(ensureWorkSlot(index)?.enabled && slotIsDouble(index)){
+      const el = sentence.querySelector(`.word[data-index="${index}"] .dual-work`);
+      if(el) return groupRect(el).bottom;
+    }
+    const el = sentence.querySelector(
+      `[data-work-word="${index}"][data-work-slot="single"]`
+    );
+    return el ? groupRect(el).bottom : null;
+  }
+
+  function endpointRect(ref, fallbackRect){
+    if(!ref) return fallbackRect;
+    const el=getDisplayElement(ref);
+    return el ? rectInWorkspace(el) : fallbackRect;
+  }
+
+  function drawGroups(){
+    groupLayer.innerHTML = '';
+    groupLayer.style.width = `${Math.max(workspace.scrollWidth, workspace.clientWidth)}px`;
+    groupLayer.style.height = `${Math.max(workspace.scrollHeight, workspace.clientHeight)}px`;
+
+    const levels = groupLevelMap();
+    const drawOrder = groups.slice().sort((a,b) =>
+      groupLogicalSpan(a) - groupLogicalSpan(b)
+      || (levels.get(a.id) || 0) - (levels.get(b.id) || 0)
+      || a.id - b.id
+    );
+
+    // 内側groupから順に描画し、その「実際に見えている最下端」を記録する。
+    // 外側下線は、この値も含めて必ず内部の全表示物より下へ置く。
+    const groupVisualBottom = new Map();
+
+    const allDisplayRects = () => selectionDisplayOrder()
+      .map(ref => {
+        const el = getDisplayElement(ref);
+        if(!el) return null;
+        return {ref, rect:rectInWorkspace(el), extent:refExtent(ref)};
+      })
+      .filter(Boolean);
+
+    for(const g of drawOrder){
+      normalizeGroupRefs(g);
+      const groupLevel = levels.get(g.id) || 0;
+      const groupTOn = ensureGroupVerbal(g).on;
+      const drawnLines = []; // {segmentIndex,rowIndex,left,right,y}
+      const displayRects = allDisplayRects();
+
+      // 下線のYは「このgroupが内部に含む、実際に表示されているもの全部」の最下端から決める。
+      // 空の通常slotの予約領域は表示物ではないので数えない。
+      // 同一groupの全segmentは、この共通Yを使う。
+      const consumedSlotRects = displayRects.filter(x =>
+        g.segments.some(seg => refInsideSegment(x.ref, seg))
+      );
+      const visibleBottoms = [];
+
+      // 文字(token)は常に表示物。
+      for(const seg of g.segments){
+        const gr = segmentRange(seg);
+        if(!gr) continue;
+        for(let i=gr.start; i<=gr.end; i++){
+          const tokenEl=sentence.querySelector(`[data-token-index="${i}"]`);
+          if(tokenEl) visibleBottoms.push(groupRect(tokenEl).bottom);
+        }
+      }
+
+      // 実際に内容が見えているslotだけを加える。単語Tは横棒・縦棒も表示物なので
+      // slot文字が空でも .verbal 全体のbottomを加える。
+      for(const x of consumedSlotRects){
+        if(refHasActualIndividualWork(x.ref)) visibleBottoms.push(x.rect.bottom);
+        if(x.ref?.group == null && verbals[x.ref.word]?.on){
+          const verbalEl=sentence.querySelector(`.word[data-index="${x.ref.word}"] .verbal`);
+          if(verbalEl) visibleBottoms.push(groupRect(verbalEl).bottom);
+        }
+      }
+
+      // このgroupに構造的に含まれる内側groupの下線・標識・Tも表示物。
+      for(const inner of groups){
+        if(!groupContainedBy(inner, g)) continue;
+        const bottom=groupVisualBottom.get(inner.id);
+        if(bottom != null) visibleBottoms.push(bottom);
+      }
+
+      const groupContentBottom = visibleBottoms.length ? Math.max(...visibleBottoms) : null;
+      const commonUnderlineY = groupContentBottom != null ? groupContentBottom + 1 : null;
+
+      for(let segmentIndex=0; segmentIndex<g.segments.length; segmentIndex++){
+        const seg=g.segments[segmentIndex];
+        const sr=segmentRange(seg);
+        if(!sr) continue;
+
+        const rects=[];
+        for(let i=sr.start;i<=sr.end;i++){
+          const wordEl=sentence.querySelector(`.word[data-index="${i}"]`);
+          if(wordEl) rects.push({i,...groupRect(wordEl)});
+        }
+        if(!rects.length) continue;
+
+        const containedSlotRects=displayRects.filter(x => refInsideSegment(x.ref, seg));
+        const cursorIsOnInnerWork = !gapMode && groupCursorId===null
+          && cursor<tokens.length && wordInsideGroup(cursor,g)
+          && refInsideSegment(currentDisplayRef(), seg);
+        let segmentHasAnyWork=cursorIsOnInnerWork;
+        if(!segmentHasAnyWork){
+          segmentHasAnyWork = refsInsideSegment(seg).some(refHasActualIndividualWork);
+        }
+        segmentHasAnyWork = !groupTOn && segmentHasAnyWork;
+
+        const rows=[];
+        for(const r of rects){
+          let row=rows.find(x=>Math.abs(x.top-r.top)<5);
+          if(!row){ row={top:r.top,rects:[]}; rows.push(row); }
+          row.rects.push(r);
+        }
+        rows.sort((a,b)=>a.top-b.top);
+
+        for(let rowIndex=0;rowIndex<rows.length;rowIndex++){
+          const row=rows[rowIndex];
+          row.rects.sort((a,b)=>a.left-b.left);
+          let first={...row.rects[0]};
+          let last={...row.rects[row.rects.length-1]};
+
+          if(rowIndex===0){
+            const er=endpointRect(seg.startRef,first);
+            if(er) first={...first,left:er.left};
+          }
+          if(rowIndex===rows.length-1){
+            const er=endpointRect(seg.endRef,last);
+            if(er) last={...last,right:er.right};
+          }
+
+          const rowStart=Math.min(...row.rects.map(x=>x.i));
+          const rowEnd=Math.max(...row.rects.map(x=>x.i));
+          const rowSlotRects=containedSlotRects.filter(x=>x.extent.end>=rowStart && x.extent.start<=rowEnd);
+          if(rowSlotRects.length){
+            first={...first,left:Math.min(first.left,...rowSlotRects.map(x=>x.rect.left))};
+            last={...last,right:Math.max(last.right,...rowSlotRects.map(x=>x.rect.right))};
+          }
+
+          // 端の外側余白は足さず、区間内部の単語間空白だけを自然に含める。
+          if(row.rects.length>=2){
+            const firstTokenEl=sentence.querySelector(`[data-token-index="${row.rects[0].i}"]`);
+            const lastTokenEl=sentence.querySelector(`[data-token-index="${row.rects[row.rects.length-1].i}"]`);
+            if(firstTokenEl && lastTokenEl){
+              const fr=groupRect(firstTokenEl), lr=groupRect(lastTokenEl);
+              first={...first,left:Math.min(first.left,fr.left)};
+              last={...last,right:Math.max(last.right,lr.right)};
+            }
+          }
+
+          const tokenBottoms=row.rects.map(x=>{
+            const tokenEl=sentence.querySelector(`[data-token-index="${x.i}"]`);
+            return tokenEl ? groupRect(tokenEl).bottom : x.top+21;
+          });
+          // 同じgroupの全segmentは必ず同じY。内部に含む全表示物の最下端+1px。
+          let y = commonUnderlineY ?? (Math.max(...tokenBottoms) + 1);
+          // 構造的に包含していない別groupとの衝突回避だけ、group単位の段差を許す。
+          y += groupLevel*10;
+
+          const line=document.createElement('div');
+          line.className='group-underline'
+            + (groupCursorId===g.id && groupCursorTarget==='underline' ? ' group-underline-cursor' : '');
+          line.style.left=`${first.left}px`;
+          line.style.top=`${y}px`;
+          line.style.width=`${Math.max(1,last.right-first.left)}px`;
+          line.dataset.groupUnderline=String(g.id);
+          line.dataset.groupSegment=String(segmentIndex);
+          line.addEventListener('click',(ev)=>{
+            ev.stopPropagation();
+            setGroupCursor(g.id, ensureGroupVerbal(g).on ? 'left' : 'underline');
+            groupSelection=null;
+            arrowDraft=null;
+            render();
+            workspace.focus();
+          });
+          groupLayer.appendChild(line);
+          drawnLines.push({segmentIndex,rowIndex,left:first.left,right:last.right,y,lineCenterY:y+1});
+        }
+      }
+
+      if(!drawnLines.length) continue;
+
+      // 非連続の場合、外側2端を除く全端点へ同色の塗りつぶし正方形を置く。
+      // border-top:2px の下線は top=y から2px描画されるため、視覚中心は y+1px。
+      // 正方形の中心Yをその視覚中心へ合わせる。
+      if(g.segments.length>1 && g.linkColor){
+        for(let si=0;si<g.segments.length-1;si++){
+          const leftLines=drawnLines.filter(x=>x.segmentIndex===si);
+          const rightLines=drawnLines.filter(x=>x.segmentIndex===si+1);
+          if(!leftLines.length || !rightLines.length) continue;
+          const leftEnd=leftLines[leftLines.length-1];
+          const rightStart=rightLines[0];
+          for(const pt of [
+            {x:leftEnd.right,y:leftEnd.lineCenterY},
+            {x:rightStart.left,y:rightStart.lineCenterY}
+          ]){
+            const mark=document.createElement('div');
+            mark.className='group-link-mark';
+            mark.dataset.groupVisual=String(g.id);
+            mark.style.left=`${pt.x}px`;
+            mark.style.top=`${pt.y}px`;
+            mark.style.backgroundColor=g.linkColor;
+            groupLayer.appendChild(mark);
+          }
+        }
+      }
+
+      // group自身の標識/Tは、一番右の下線区間を基準に置く。
+      const lastSegmentIndex=g.segments.length-1;
+      const anchorLines=drawnLines.filter(x=>x.segmentIndex===lastSegmentIndex);
+      const anchor=anchorLines[anchorLines.length-1] || drawnLines[drawnLines.length-1];
+      const first=anchor;
+      const last=anchor;
+      const y=anchor.y;
+      const centerX=(anchor.left+anchor.right)/2;
+      const width=Math.max(66,anchor.right-anchor.left);
+      const gv=ensureGroupVerbal(g);
+
+      if(gv.on){
+        const verbal=document.createElement('div');
+        verbal.className='group-verbal';
+        verbal.dataset.groupVisual=String(g.id);
+        verbal.style.left=`${centerX-width/2}px`;
+        verbal.style.top=`${y}px`;
+        verbal.style.width=`${width}px`;
+
+        const stem=document.createElement('div');
+        stem.className='group-verbal-stem';
+
+        const left=document.createElement('div');
+        const groupLeftPending=pendingKeys && pendingGroupId===g.id && pendingGroupSlot==='left';
+        left.className='group-verbal-left'
+          + (refInActiveGroupSelection({group:g.id, slot:'left'}) ? ' slot-group-selecting-active':'')
+          + (refInFixedGroupSelection({group:g.id, slot:'left'}) ? ' slot-group-selecting-fixed':'')
+          + (refIsGroupSelectionCursor({group:g.id, slot:'left'}) ? ' slot-group-selection-cursor':'')
+          + (groupCursorId===g.id && groupCursorTarget==='left' && !gapMode && !groupSelection ? ' group-verbal-slot-cursor':'')
+          + (groupLeftPending ? ' pending-mark':'');
+        left.textContent=groupLeftPending ? pendingKeys : tSlotText(gv,'left');
+        left.dataset.groupWork=String(g.id);
+        left.dataset.groupSlot='left';
+        applySlotGeometry(left, {group:g.id, slot:'left'});
+        if(!tSlot(gv,'left').enabled) left.style.visibility='hidden';
+
+        const right=document.createElement('div');
+        const groupRightPending=pendingKeys && pendingGroupId===g.id && pendingGroupSlot==='right';
+        right.className='group-verbal-right'
+          + (refInActiveGroupSelection({group:g.id, slot:'right'}) ? ' slot-group-selecting-active':'')
+          + (refInFixedGroupSelection({group:g.id, slot:'right'}) ? ' slot-group-selecting-fixed':'')
+          + (refIsGroupSelectionCursor({group:g.id, slot:'right'}) ? ' slot-group-selection-cursor':'')
+          + (groupCursorId===g.id && groupCursorTarget==='right' && !gapMode && !groupSelection ? ' group-verbal-slot-cursor':'')
+          + (groupRightPending ? ' pending-mark':'');
+        right.textContent=groupRightPending ? pendingKeys : tSlotText(gv,'right');
+        right.dataset.groupWork=String(g.id);
+        right.dataset.groupSlot='right';
+        applySlotGeometry(right, {group:g.id, slot:'right'});
+        if(!tSlot(gv,'right').enabled) right.style.visibility='hidden';
+
+        const selectSlot=(side)=>(ev)=>{
+          ev.stopPropagation();
+          setGroupCursor(g.id, side);
+          groupSelection=null;
+          arrowDraft=null;
+          render();
+          workspace.focus();
+        };
+        left.addEventListener('click',selectSlot('left'));
+        right.addEventListener('click',selectSlot('right'));
+        verbal.append(stem,left,right);
+        groupLayer.appendChild(verbal);
+      }else{
+        const mark=document.createElement('div');
+        const groupPending=pendingKeys && pendingGroupId===g.id && pendingGroupSlot==null;
+        // groupCursorTarget により underline と single slot を明示的に区別する。
+        // 表示カーソルは必ずどちらか一方だけに出る。
+        const showGroupMarkCursor = groupCursorId===g.id && groupCursorTarget==='single' && !gapMode;
+        mark.className='group-mark'
+          + (showGroupMarkCursor ? ' group-mark-cursor':'')
+          + (groupPending ? ' pending-mark':'');
+        mark.textContent=groupPending ? pendingKeys : (g.mark || '');
+        applySlotGeometry(mark, {group:g.id, slot:null}, anchor.right-anchor.left);
+        // slotGeometry は幅だけを決める。group の絶対X座標は anchor が正本。
+        mark.style.left=`${anchor.left}px`;
+        // 下線は2px厚なので、single slotの上端を線の直下へ密着させる。
+        mark.style.top=`${y+2}px`;
+        mark.dataset.groupWork=String(g.id);
+        mark.dataset.groupSlot='single';
+        if(arrowDraft?.group===g.id && !arrowDraft.slot) mark.classList.add('arrow-source');
+        mark.addEventListener('click',(ev)=>{
+          ev.stopPropagation();
+          setGroupCursor(g.id, 'single');
+          groupSelection=null;
+          arrowDraft=null;
+          render();
+          workspace.focus();
+        });
+        groupLayer.appendChild(mark);
+      }
+
+      // このgroup自身の現在の可視物の最下端を、外側groupのY計算用に記録する。
+      const ownVisualEls=[
+        ...groupLayer.querySelectorAll(`[data-group-underline="${g.id}"]`),
+        ...groupLayer.querySelectorAll(`[data-group-work="${g.id}"]`),
+        ...groupLayer.querySelectorAll(`[data-group-visual="${g.id}"]`)
+      ];
+      if(ownVisualEls.length){
+        groupVisualBottom.set(g.id, Math.max(...ownVisualEls.map(el => groupRect(el).bottom)));
+      }
+    }
+  }
+
+  function beginGroupSelection(){
+    if(tokens.length === 0 || arrowDraft) return;
+    const ref=currentDisplayRef();
+    if(!ref) return;
+    groupSelection = {segments:[], anchor:cloneRef(ref), head:cloneRef(ref), selecting:true};
+    render();
+  }
+
+  function moveGroupSelection(delta){
+    if(!groupSelection) return;
+    if(!groupSelection.selecting){
+      moveCursor(delta < 0 ? 'left' : 'right');
+      return;
+    }
+    const order=selectionDisplayOrder();
+    const i=order.findIndex(x=>sameDisplayRef(x,groupSelection.head));
+    if(i<0) return;
+    const ni=Math.max(0,Math.min(order.length-1,i+delta));
+    const candidate=order[ni];
+    if(!sameSentenceRefs(groupSelection.anchor, candidate)) return;
+    groupSelection.head=cloneRef(candidate);
+    const ref=candidate;
+    if(ref.group != null){
+      groupCursorId=ref.group; groupCursorSlot=ref.slot; groupCursorTarget=ref.slot || (groupById(ref.group)?.mark ? 'single' : 'underline');
+      const g=groupById(ref.group); if(g) cursor=g.start;
+      cursorSlot=null;
+    }else{
+      clearGroupCursor();
+      cursor=ref.word; cursorSlot=ref.slot;
+    }
+    render();
+  }
+
+  function toggleGroupSelectionSegment(){
+    if(!groupSelection) return;
+    if(groupSelection.selecting){
+      const seg=normalizedSelectionSegment(groupSelection.anchor, groupSelection.head);
+      if(seg){
+        groupSelection.segments.push({from:cloneRef(seg.from),to:cloneRef(seg.to)});
+      }
+      groupSelection.selecting=false;
+      groupSelection.anchor=null;
+      groupSelection.head=null;
+      render();
+      return;
+    }
+    const ref=currentDisplayRef();
+    if(!ref) return;
+    const first=groupSelection.segments[0];
+    if(first && !sameSentenceRefs(first.from, ref)) return;
+    groupSelection.anchor=cloneRef(ref);
+    groupSelection.head=cloneRef(ref);
+    groupSelection.selecting=true;
+    render();
+  }
+
+  function mergedSelectionSegments(){
+    const segs=selectionSegments(true).sort((a,b)=>a.fromIndex-b.fromIndex);
+    if(!segs.length) return [];
+    const merged=[];
+    for(const seg of segs){
+      const last=merged[merged.length-1];
+      if(last && seg.fromIndex <= last.toIndex + 1){
+        if(seg.toIndex > last.toIndex){
+          last.to=cloneRef(seg.to);
+          last.toIndex=seg.toIndex;
+          last.count=last.toIndex-last.fromIndex+1;
+        }
+      }else{
+        merged.push({...seg, from:cloneRef(seg.from), to:cloneRef(seg.to)});
+      }
+    }
+    return merged;
+  }
+
+  const GROUP_LINK_COLORS=[
+    '#d97706','#2563eb','#16a34a','#dc2626','#7c3aed','#0891b2',
+    '#db2777','#65a30d','#ea580c','#4f46e5','#0f766e','#9333ea'
+  ];
+  function allocateGroupLinkColor(sentenceIndex){
+    const used=new Set(groups
+      .filter(g => sentenceOfRef(groupSegments(g)[0]?.startRef)===sentenceIndex && groupSegments(g).length>1 && g.linkColor)
+      .map(g=>g.linkColor));
+    for(const color of GROUP_LINK_COLORS) if(!used.has(color)) return color;
+
+    // パレットを使い切っても、同じ文内で未使用の色を生成する。
+    let n=0;
+    while(true){
+      const hue=Math.round((n*137.508)%360);
+      const color=`hsl(${hue} 72% 43%)`;
+      if(!used.has(color)) return color;
+      n++;
+    }
+  }
+
+  function commitGroupSelection(){
+    const historyBefore = captureMarkState();
+    const segs=mergedSelectionSegments();
+    const totalCount=segs.reduce((n,x)=>n+x.count,0);
+    if(totalCount < 2 || !segs.length || !segs.every(x=>sameSentenceRefs(segs[0].from,x.to))){
+      groupSelection = null;
+      render();
+      return;
+    }
+
+    const g = {
+      id:nextGroupId++,
+      segments:segs.map(seg => ({startRef:cloneRef(seg.from),endRef:cloneRef(seg.to)})),
+      mark:'',
+      linkColor:segs.length>1 ? allocateGroupLinkColor(sentenceOfRef(segs[0].from)) : '',
+      verbal:makeTState(false)
+    };
+    normalizeGroupRefs(g);
+    groups.push(g);
+    groups.sort((a,b) => a.start - b.start || a.end - b.end || a.id - b.id);
+    groupSelection = null;
+    setGroupCursor(g.id, 'underline');
+    refreshWorkSlotEnabled();
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function ungroupCurrent(){
+    const g = groupCursorId !== null ? groupById(groupCursorId) : groupForWord(cursor);
+    if(!g) return;
+    const historyBefore = captureMarkState();
+    arrows = arrows.filter(a => a.from?.group !== g.id && a.to?.group !== g.id);
+    if(arrowDraft?.group === g.id) arrowDraft = null;
+    groups = groups.filter(x => x.id !== g.id);
+    refreshWorkSlotEnabled();
+    clearGroupCursor();
+    cursor = g.start;
+    cursorSlot = verbals[cursor]?.on ? 'left' : null;
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function enterGroupWork(){
+    if(cursor >= tokens.length) return false;
+    const g = groupForWord(cursor);
+    if(!g) return false;
+    setGroupCursor(g.id, ensureGroupVerbal(g).on ? 'left' : (g.mark ? 'single' : 'underline'));
+    render();
+    return true;
+  }
+
+  function leaveGroupWork(){
+    if(groupCursorId === null) return false;
+    const g = groupById(groupCursorId);
+    const target = leftmostWorkPositionInGroup(g);
+    clearGroupCursor();
+    if(target){
+      cursor = target.word;
+      cursorSlot = target.slot;
+    }
+    render();
+    return true;
+  }
+
+  function currentBoundaryIndex(){
+    // 通常語/T/結合内の単語ではその単語の左。
+    // ダミー位置では文末境界。
+    return Math.max(0, Math.min(cursor, tokens.length));
+  }
+
+  function appendBoundarySymbol(ch){
+    const historyBefore = captureMarkState();
+    const i = currentBoundaryIndex();
+    gaps[i] = (gaps[i] || '') + ch;
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function backspaceBoundarySymbol(){
+    const historyBefore = captureMarkState();
+    const i = currentBoundaryIndex();
+    gaps[i] = (gaps[i] || '').slice(0, -1);
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function clearBoundarySymbol(){
+    const historyBefore = captureMarkState();
+    const i = currentBoundaryIndex();
+    gaps[i] = '';
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function enterGapMode(){
+    if(tokens.length === 0) return;
+    // 通常カーソル位置の左境界へ入る。文末ダミーなら文末境界。
+    gapCursor = currentBoundaryIndex();
+    gapMode = true;
+    arrowDraft = null;
+    groupSelection = null;
+    render();
+    workspace.focus();
+  }
+
+  function leaveGapMode(){
+    if(tokens.length === 0){
+      gapMode = false;
+      render();
+      return;
+    }
+
+    // 境界から単語へ戻る際は右の単語。
+    // 文末境界のみ左の最後の単語へ戻る。
+    if(gapCursor >= tokens.length){
+      cursor = tokens.length - 1;
+    }else{
+      cursor = gapCursor;
+    }
+    clearGroupCursor();
+    cursorSlot = (cursor < tokens.length && verbals[cursor]?.on) ? 'left' : null;
+    gapMode = false;
+    render();
+    workspace.focus();
+  }
+
+  function moveGap(delta){
+    gapCursor = Math.max(0, Math.min(tokens.length, gapCursor + delta));
+    render();
+    sentence.querySelector(`[data-gap-index="${gapCursor}"]`)
+      ?.scrollIntoView({block:'nearest', inline:'nearest'});
+  }
+
+  function appendGapModeSymbol(ch){
+    const historyBefore = captureMarkState();
+    gaps[gapCursor] = (gaps[gapCursor] || '') + ch;
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function backspaceGapModeSymbol(){
+    const historyBefore = captureMarkState();
+    gaps[gapCursor] = (gaps[gapCursor] || '').slice(0, -1);
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function clearGapModeSymbol(){
+    const historyBefore = captureMarkState();
+    gaps[gapCursor] = '';
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function currentDisplayRef(){
+    if(tokens.length === 0 || cursor >= tokens.length) return null;
+    if(groupCursorId !== null){
+      const g=groupById(groupCursorId);
+      const gv=ensureGroupVerbal(g);
+      if(gv?.on && groupCursorSlot && !tSlot(gv,groupCursorSlot)?.enabled) return null;
+      return {group:groupCursorId, slot:groupCursorSlot};
+    }
+    if(verbals[cursor]?.on && cursorSlot && !tSlot(verbals[cursor],cursorSlot)?.enabled) return null;
+    return {
+      word: cursor,
+      slot: (verbals[cursor]?.on || slotIsDouble(cursor)) ? cursorSlot : null
+    };
+  }
+
+  function sameDisplayRef(a, b){
+    if(!a || !b) return false;
+    if(a.group != null || b.group != null){
+      return a.group != null && b.group != null
+        && a.group === b.group
+        && (a.slot || null) === (b.slot || null);
+    }
+    return a.word === b.word && a.slot === b.slot;
+  }
+
+  function displayKey(ref){
+    if(ref?.group != null) return `group:${ref.group}:${ref.slot || 'single'}`;
+    return `${ref.word}:${ref.slot || 'single'}`;
+  }
+
+  function getDisplayValue(ref){
+    if(!ref) return '';
+    if(ref.group != null){
+      const g = groupById(ref.group);
+      if(!g) return '';
+      const gv = ensureGroupVerbal(g);
+      if(gv.on){
+        if(ref.slot !== 'left' && ref.slot !== 'right') return '';
+        const ts=tSlot(gv,ref.slot);
+        return ts?.enabled ? (ts.text || '') : '';
+      }
+      return ref.slot == null ? (g.mark || '') : '';
+    }
+    if(ref.word < 0 || ref.word >= tokens.length) return '';
+    const d = ensureWorkSlot(ref.word);
+    if(d?.enabled && d.kind === 'double'){
+      if(ref.slot !== 'left' && ref.slot !== 'right') return '';
+      return d[ref.slot] || '';
+    }
+    const v = verbals[ref.word];
+    if(v?.on){
+      if(ref.slot !== 'left' && ref.slot !== 'right') return '';
+      const ts=tSlot(v,ref.slot);
+      return ts?.enabled ? (ts.text || '') : '';
+    }
+    if(ref.slot !== null) return '';
+    return d?.enabled && d.kind === 'single' ? (d.text || '') : '';
+  }
+
+  function isValidDisplayRef(ref){
+    if(!ref) return false;
+    if(ref.group != null){
+      const g = groupById(ref.group);
+      if(!g) return false;
+      const gv = ensureGroupVerbal(g);
+      return gv.on
+        ? ((ref.slot === 'left' || ref.slot === 'right') && Boolean(tSlot(gv,ref.slot)?.enabled))
+        : (ref.slot == null);
+    }
+    if(ref.word < 0 || ref.word >= tokens.length) return false;
+    const d = ensureWorkSlot(ref.word);
+    if(!d?.enabled && !verbals[ref.word]?.on) return false;
+    if(d?.enabled && d.kind === 'double') return ref.slot === 'left' || ref.slot === 'right';
+    const v = verbals[ref.word];
+    if(v?.on) return (ref.slot === 'left' || ref.slot === 'right') && Boolean(tSlot(v,ref.slot)?.enabled);
+    return ref.slot === null;
+  }
+
+  function cleanupArrows(){
+    arrows = arrows.filter(a =>
+      isValidDisplayRef(a.from) &&
+      isValidDisplayRef(a.to) &&
+      sameSentenceRefs(a.from, a.to) &&
+      ['ad','a','副詞的目的格'].includes(getDisplayValue(a.from))
+    );
+    if(arrowDraft && (!isValidDisplayRef(arrowDraft) || !['ad','a','副詞的目的格'].includes(getDisplayValue(arrowDraft)))){
+      arrowDraft = null;
+    }
+  }
+
+  function beginArrow(){
+    const ref = currentDisplayRef();
+    if(!ref || !['ad','a','副詞的目的格'].includes(getDisplayValue(ref))){
+      modeBadge.textContent = 'ARROW: source must be a / ad / 副詞的目的格';
+      modeBadge.classList.add('pending');
+      return;
+    }
+    arrowDraft = {...ref};
+    render();
+  }
+
+  function commitArrow(){
+    if(!arrowDraft) return;
+    const to = currentDisplayRef();
+    if(!to || sameDisplayRef(arrowDraft, to)) return;
+    if(!sameSentenceRefs(arrowDraft, to)){
+      modeBadge.textContent = 'ARROW: 文を跨げません';
+      modeBadge.classList.add('pending');
+      return;
+    }
+
+    // 1つの修飾標識からは1本。既存があれば付け替える。
+    arrows = arrows.filter(a => !sameDisplayRef(a.from, arrowDraft));
+    arrows.push({from:{...arrowDraft}, to:{...to}});
+    arrowDraft = null;
+    render();
+  }
+
+  function cancelArrow(){
+    if(!arrowDraft) return;
+    arrowDraft = null;
+    render();
+  }
+
+  function deleteArrowFromCurrent(){
+    const ref = currentDisplayRef();
+    if(!ref) return;
+    arrows = arrows.filter(a => !sameDisplayRef(a.from, ref));
+    if(sameDisplayRef(arrowDraft, ref)) arrowDraft = null;
+    render();
+  }
+
+  // slot横幅を決める唯一のロジック。描画側は個別に width/left/right を決めない。
+  // availableWidth は group の single slot のように下線幅からpx幅を決める場合だけ渡す。
+  function slotGeometry(ref, availableWidth = null){
+    if(!ref) return null;
+
+    if(ref.group != null){
+      const g = groupById(ref.group);
+      const gv = ensureGroupVerbal(g);
+      if(gv?.on && (ref.slot === 'left' || ref.slot === 'right')){
+        // 中央の縦棒は2px幅（中心から左右1px）。slot はその領域を消費しない。
+        return ref.slot === 'left'
+          ? {width:'calc(50% - 1px)', left:'0', right:'auto'}
+          : {width:'calc(50% - 1px)', left:'calc(50% + 1px)', right:'auto'};
+      }
+      return {width:`${Math.max(24, availableWidth ?? 24)}px`, left:null, right:null};
+    }
+
+    const v = verbals[ref.word];
+    if(v?.on && (ref.slot === 'left' || ref.slot === 'right')){
+      // 中央の縦棒は2px幅（中心から左右1px）。slot はその領域を消費しない。
+      return ref.slot === 'left'
+        ? {width:'calc(50% - 1px)', left:'0', right:'auto'}
+        : {width:'calc(50% - 1px)', left:'calc(50% + 1px)', right:'auto'};
+    }
+
+    const slot = ensureWorkSlot(ref.word);
+    if(slot?.enabled && slot.kind === 'double' && (ref.slot === 'left' || ref.slot === 'right')){
+      return ref.slot === 'left'
+        ? {width:'46%', left:'0', right:'auto'}
+        : {width:'46%', left:'54%', right:'auto'};
+    }
+
+    return {width:'100%', left:null, right:null};
+  }
+
+  function applySlotGeometry(el, ref, availableWidth = null){
+    if(!el) return;
+    const geometry = slotGeometry(ref, availableWidth);
+    if(!geometry) return;
+    el.style.width = geometry.width;
+    if(geometry.left != null) el.style.left = geometry.left; else el.style.removeProperty('left');
+    if(geometry.right != null) el.style.right = geometry.right; else el.style.removeProperty('right');
+  }
+
+  function getDisplayElement(ref){
+    if(!ref) return null;
+    if(ref.group != null){
+      const slot = ref.slot || 'single';
+      return groupLayer.querySelector(
+        `[data-group-work="${ref.group}"][data-group-slot="${slot}"]`
+      );
+    }
+    const slot = ref.slot || 'single';
+    return sentence.querySelector(`[data-work-word="${ref.word}"][data-work-slot="${slot}"]`);
+  }
+
+  function rectInWorkspace(el){
+    const r = el.getBoundingClientRect();
+    const w = workspace.getBoundingClientRect();
+    return {
+      left: r.left - w.left + workspace.scrollLeft,
+      right: r.right - w.left + workspace.scrollLeft,
+      top: r.top - w.top + workspace.scrollTop,
+      bottom: r.bottom - w.top + workspace.scrollTop,
+      width: r.width,
+      height: r.height,
+      cx: (r.left + r.right) / 2 - w.left + workspace.scrollLeft,
+      cy: (r.top + r.bottom) / 2 - w.top + workspace.scrollTop
+    };
+  }
+
+  function getRows(){
+    const wordEls = [...sentence.querySelectorAll('.word')];
+    const rows = [];
+    for(const el of wordEls){
+      const r = rectInWorkspace(el);
+      let row = rows.find(x => Math.abs(x.top - r.top) < 5);
+      if(!row){
+        row = {top:r.top, bottom:r.bottom, words:[]};
+        rows.push(row);
+      }
+      row.top = Math.min(row.top, r.top);
+      row.bottom = Math.max(row.bottom, r.bottom);
+      row.words.push(Number(el.dataset.index));
+    }
+    rows.sort((a,b) => a.top - b.top);
+    return rows;
+  }
+
+  function rowIndexForWord(rows, wordIndex){
+    return rows.findIndex(r => r.words.includes(wordIndex));
+  }
+
+  function flattenedDisplayOrder(){
+    const list = [];
+    for(let i=0; i<tokens.length; i++){
+      if(verbals[i]?.on || slotIsDouble(i)){
+        list.push({word:i, slot:'left'}, {word:i, slot:'right'});
+      }else{
+        list.push({word:i, slot:null});
+      }
+      const g = groups.find(x => x.end === i);
+      if(g) list.push({group:g.id});
+    }
+    return list;
+  }
+
+  function createSvgPath(d, {preview=false, arrowHead=false} = {}){
+    const NS = 'http://www.w3.org/2000/svg';
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', d);
+    p.setAttribute('fill', 'none');
+    p.setAttribute('stroke', preview ? '#9ca3af' : getComputedStyle(document.documentElement).getPropertyValue('--mark').trim());
+    p.setAttribute('stroke-width', '1.6');
+    p.setAttribute('stroke-linecap', 'round');
+    p.setAttribute('stroke-linejoin', 'round');
+    if(preview) p.setAttribute('stroke-dasharray', '4 4');
+    if(arrowHead) p.setAttribute('marker-end', preview ? 'url(#arrowHeadPreview)' : 'url(#arrowHead)');
+    arrowLayer.appendChild(p);
+  }
+
+  function drawOneArrow(from, to, preview=false){
+    const fromEl = getDisplayElement(from);
+    const toEl = getDisplayElement(to);
+    if(!fromEl || !toEl) return;
+
+    const a = rectInWorkspace(fromEl);
+    const b = rectInWorkspace(toEl);
+    const rows = getRows();
+    const ra = rowIndexForWord(rows, refWord(from));
+    const rb = rowIndexForWord(rows, refWord(to));
+    if(ra < 0 || rb < 0) return;
+
+    const order = flattenedDisplayOrder();
+    const ia = order.findIndex(x => sameDisplayRef(x, from));
+    const ib = order.findIndex(x => sameDisplayRef(x, to));
+    const forward = ib >= ia;
+
+    const sentenceRect = rectInWorkspace(sentence);
+    const leftEdge = sentenceRect.left + 2;
+    const rightEdge = sentenceRect.right - 2;
+    // 矢印を標識から少し下へ降ろしてから横へ曲げる共通距離。
+    const gap = 16;
+
+    if(ra === rb){
+      const laneY = Math.max(a.bottom, b.bottom) + gap;
+      createSvgPath(
+        `M ${a.cx} ${a.bottom + 1} L ${a.cx} ${laneY} L ${b.cx} ${laneY} L ${b.cx} ${b.bottom + 1}`,
+        {preview, arrowHead:true}
+      );
+      return;
+    }
+
+    const step = rb > ra ? 1 : -1;
+    const exitEdge = forward ? rightEdge : leftEdge;
+    const enterEdge = forward ? leftEdge : rightEdge;
+
+    // 始点行: 修飾標識の下からその行の端まで。
+    const firstLane = rows[ra].bottom + gap;
+    createSvgPath(
+      `M ${a.cx} ${a.bottom + 1} L ${a.cx} ${firstLane} L ${exitEdge} ${firstLane}`,
+      {preview, arrowHead:false}
+    );
+
+    // 中間行: 逆側の端から生えて、その行の反対端まで伸ばす。
+    for(let r = ra + step; r !== rb; r += step){
+      const lane = rows[r].bottom + gap;
+      createSvgPath(
+        `M ${enterEdge} ${lane} L ${exitEdge} ${lane}`,
+        {preview, arrowHead:false}
+      );
+    }
+
+    // 終点行: 逆端から生えて、終点の下へ入り、最後に終点へ向かう。
+    const lastLane = rows[rb].bottom + gap;
+    createSvgPath(
+      `M ${enterEdge} ${lastLane} L ${b.cx} ${lastLane} L ${b.cx} ${b.bottom + 1}`,
+      {preview, arrowHead:true}
+    );
+  }
+
+  function drawArrows(){
+    cleanupArrows();
+    arrowLayer.innerHTML = '';
+
+    const width = Math.max(workspace.scrollWidth, workspace.clientWidth);
+    const height = Math.max(workspace.scrollHeight, workspace.clientHeight);
+    arrowLayer.setAttribute('width', String(width));
+    arrowLayer.setAttribute('height', String(height));
+    arrowLayer.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+    const NS = 'http://www.w3.org/2000/svg';
+    const defs = document.createElementNS(NS, 'defs');
+
+    const marker = document.createElementNS(NS, 'marker');
+    marker.setAttribute('id', 'arrowHead');
+    marker.setAttribute('markerWidth', '7');
+    marker.setAttribute('markerHeight', '7');
+    marker.setAttribute('refX', '6');
+    marker.setAttribute('refY', '3.5');
+    marker.setAttribute('orient', 'auto');
+    marker.setAttribute('markerUnits', 'strokeWidth');
+    const tip = document.createElementNS(NS, 'path');
+    tip.setAttribute('d', 'M 0 0 L 7 3.5 L 0 7 z');
+    tip.setAttribute('fill', getComputedStyle(document.documentElement).getPropertyValue('--mark').trim());
+    marker.appendChild(tip);
+
+    const previewMarker = marker.cloneNode(true);
+    previewMarker.setAttribute('id', 'arrowHeadPreview');
+    previewMarker.querySelector('path').setAttribute('fill', '#9ca3af');
+
+    defs.append(marker, previewMarker);
+    arrowLayer.appendChild(defs);
+
+    for(const arrow of arrows) drawOneArrow(arrow.from, arrow.to, false);
+
+    if(arrowDraft){
+      const to = currentDisplayRef();
+      if(to && !sameDisplayRef(arrowDraft, to) && sameSentenceRefs(arrowDraft, to)){
+        drawOneArrow(arrowDraft, to, true);
+      }
+    }
+  }
+
+  function setMode(nextMode){
+    mode = nextMode;
+    pendingKeys = '';
+    pendingCursor = null;
+    pendingSlot = null;
+    pendingGroupId = null;
+    pendingGroupSlot = null;
+    numericPending = false;
+    verbalEditingSide = null;
+    verbalEditingBuffer = '';
+    verbalEditingOriginal = '';
+    modeBadge.textContent = mode;
+    modeBadge.classList.remove('pending');
+
+    if(mode === 'INSERT'){
+      arrowDraft = null;
+      gapMode = false;
+      cursorSlot = null;
+      input.focus();
+    }else{
+      workspace.focus();
+    }
+    render();
+  }
+
+  function setMark(mark){
+    if(tokens.length === 0 || cursor >= tokens.length) return;
+    const historyBefore = captureMarkState();
+
+    if(groupCursorId !== null){
+      const g = groupById(groupCursorId);
+      if(g){
+        const gv = ensureGroupVerbal(g);
+        if(gv.on && (groupCursorSlot === 'left' || groupCursorSlot === 'right')){
+          if(tSlot(gv,groupCursorSlot)?.enabled) setTSlotText(gv, groupCursorSlot, mark);
+        }else{
+          g.mark = mark;
+          groupCursorTarget = 'single';
+        }
+      }
+      cleanupArrows();
+      render();
+      pushMarkUndo(historyBefore);
+      return;
+    }
+
+    // V下線全体がTなら、内側の各単語の標識スロットは保持したまま無効化される。
+    if(wordDisplayDisabledByGroupT(cursor)){
+      render();
+      return;
+    }
+
+    const d = ensureWorkSlot();
+    if(cursorSlot && d?.enabled && d.kind === 'double'){
+      d[cursorSlot] = mark;
+      cleanupArrows();
+      render();
+      pushMarkUndo(historyBefore);
+      return;
+    }
+
+    const v = ensureVerbal();
+
+    if(cursorSlot && v?.on){
+      setTSlotText(v, cursorSlot, mark);
+      cleanupArrows();
+      render();
+      pushMarkUndo(historyBefore);
+      return;
+    }
+
+    // T字のある単語では元の標識スロットを保持したまま無効化する。
+    if(v?.on){
+      render();
+      return;
+    }
+
+    const slot = ensureWorkSlot(cursor);
+    if(slot?.enabled){
+      slot.kind = 'single';
+      slot.text = mark;
+    }
+    cleanupArrows();
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function ensureVerbal(index = cursor){
+    if(tokens.length === 0) return null;
+    if(!verbals[index]) verbals[index] = makeTState(false);
+    return ensureTState(verbals[index]);
+  }
+
+  function toggleDual(){
+    if(tokens.length === 0 || cursor >= tokens.length) return;
+    if(groupCursorId !== null || wordDisplayDisabledByGroupT(cursor)) return;
+    const historyBefore = captureMarkState();
+
+    const v = ensureVerbal();
+    if(v?.on) return;
+
+    const slot = ensureWorkSlot(cursor);
+    if(!slot || !slot.enabled) return;
+
+    arrows = arrows.filter(a => a.from.word !== cursor && a.to.word !== cursor);
+    if(arrowDraft?.word === cursor) arrowDraft = null;
+
+    if(slot.kind !== 'double'){
+      slot.kind = 'double';
+      slot.left = slot.text || slot.left || '';
+      slot.right = slot.right || '';
+      slot.text = '';
+      cursorSlot = 'left';
+    }else{
+      slot.kind = 'single';
+      slot.text = slot.left || slot.right || '';
+      slot.left = '';
+      slot.right = '';
+      cursorSlot = null;
+    }
+
+    pendingKeys = '';
+    pendingCursor = null;
+    pendingSlot = null;
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function toggleVerbal(){
+    const historyBefore = captureMarkState();
+    if(groupCursorId !== null){
+      const g = groupById(groupCursorId);
+      const gv = ensureGroupVerbal(g);
+      if(!gv) return;
+
+      // t はT化専用。すでにTなら何もしない。削除は X に統一する。
+      if(gv.on){
+        render();
+        return;
+      }
+
+      // V下線に対応する1つの働きの標識を、語群全体を包むT表示へ変換する。
+      arrows = arrows.filter(a => a.from?.group !== g.id && a.to?.group !== g.id);
+      if(arrowDraft?.group === g.id) arrowDraft = null;
+
+      gv.on = true;
+      g.mark = '';
+      refreshWorkSlotEnabled();
+      groupCursorSlot = 'left';
+      groupCursorTarget = 'left';
+      cursorSlot = null;
+      pendingKeys = '';
+      pendingCursor = null;
+      pendingSlot = null;
+      pendingGroupId = null;
+      pendingGroupSlot = null;
+      render();
+      pushMarkUndo(historyBefore);
+      return;
+    }
+
+    if(cursor >= tokens.length) return;
+    if(wordDisplayDisabledByGroupT(cursor)){
+      render();
+      return;
+    }
+
+    const v = ensureVerbal();
+    if(!v) return;
+
+    // t はT化専用。すでにTなら何もしない。削除は X に統一する。
+    if(v.on){
+      render();
+      return;
+    }
+
+    const slot = ensureWorkSlot(cursor);
+    if(slot) slot.enabled = false;
+
+    // T化で働きの標識の個数が変わるので、この単語に接続された矢印は外す。
+    arrows = arrows.filter(a => a.from.word !== cursor && a.to.word !== cursor);
+    if(arrowDraft?.word === cursor) arrowDraft = null;
+
+    // T化しても元の標識スロット内容は保持し、enabledだけをoffにする。
+    v.on = true;
+    if(slot) slot.enabled = false;
+    refreshWorkSlotEnabled();
+    cursorSlot = 'left';
+
+    verbalEditingSide = null;
+    verbalEditingBuffer = '';
+    verbalEditingOriginal = '';
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  // X は「現在選択している構造」を1段だけ削除する。
+  //   単語T   -> Tを削除
+  //   V下線T  -> Tを削除して通常のV下線へ戻す
+  //   V下線   -> 下線グループ自体を削除
+  function clearVerbal(){
+    const historyBefore = captureMarkState();
+    if(groupCursorId !== null){
+      const g = groupById(groupCursorId);
+      if(!g) return;
+      const gv = ensureGroupVerbal(g);
+
+      arrows = arrows.filter(a => a.from?.group !== g.id && a.to?.group !== g.id);
+      if(arrowDraft?.group === g.id) arrowDraft = null;
+
+      if(gv.on){
+        // Tという上位構造だけを外し、V下線そのものは残す。
+        g.verbal = makeTState(false);
+        refreshWorkSlotEnabled();
+        groupCursorSlot = null;
+        groupCursorTarget = g.mark ? 'single' : 'underline';
+        render();
+        pushMarkUndo(historyBefore);
+      }else{
+        // 通常のV下線を選択中なら、その下線構造自体を削除する。
+        ungroupCurrent();
+      }
+      return;
+    }
+
+    if(cursor >= tokens.length) return;
+    if(wordDisplayDisabledByGroupT(cursor)){
+      render();
+      return;
+    }
+    const v = ensureVerbal();
+    if(!v || !v.on) return;
+    arrows = arrows.filter(a => a.from.word !== cursor && a.to.word !== cursor);
+    if(arrowDraft?.word === cursor) arrowDraft = null;
+    verbals[cursor] = makeTState(false);
+    refreshWorkSlotEnabled();
+    cursorSlot = null;
+    verbalEditingSide = null;
+    verbalEditingBuffer = '';
+    verbalEditingOriginal = '';
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function setVerbalSide(side){
+    if(cursor >= tokens.length) return;
+    if(wordDisplayDisabledByGroupT(cursor)){
+      render();
+      return;
+    }
+    const slot = ensureWorkSlot(cursor);
+    const v = ensureVerbal();
+    if(!v) return;
+    v.on = true;
+    if(slot) slot.enabled = false;
+    refreshWorkSlotEnabled();
+    cursorSlot = side;
+    verbalEditingSide = side;
+    verbalEditingOriginal = tSlotText(v, side);
+    verbalEditingBuffer = verbalEditingOriginal;
+    pendingKeys = '';
+    pendingCursor = null;
+    pendingGroupId = null;
+    pendingGroupSlot = null;
+    render();
+    workspace.focus();
+  }
+
+  function commitVerbalEditing(){
+    if(!verbalEditingSide) return;
+    const historyBefore = captureMarkState();
+    const v = ensureVerbal();
+    if(v) setTSlotText(v, verbalEditingSide, verbalEditingBuffer.trim());
+    verbalEditingSide = null;
+    verbalEditingBuffer = '';
+    verbalEditingOriginal = '';
+    render();
+    pushMarkUndo(historyBefore);
+    workspace.focus();
+  }
+
+  function cancelVerbalEditing(){
+    verbalEditingSide = null;
+    verbalEditingBuffer = '';
+    verbalEditingOriginal = '';
+    render();
+    workspace.focus();
+  }
+
+  function handleVerbalEditingKey(e){
+    if(!verbalEditingSide) return false;
+
+    if(e.key === 'Enter'){
+      e.preventDefault();
+      commitVerbalEditing();
+      return true;
+    }
+    if(e.key === 'Escape'){
+      e.preventDefault();
+      cancelVerbalEditing();
+      return true;
+    }
+    if(e.key === 'Backspace'){
+      e.preventDefault();
+      verbalEditingBuffer = verbalEditingBuffer.slice(0, -1);
+      render();
+      return true;
+    }
+    if(e.key === 'Delete'){
+      e.preventDefault();
+      verbalEditingBuffer = '';
+      render();
+      return true;
+    }
+    if(e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey){
+      e.preventDefault();
+      verbalEditingBuffer += e.key;
+      render();
+      return true;
+    }
+    return true;
+  }
+
+  function firstSlotOf(index){
+    if(index < 0 || index >= tokens.length) return null;
+    if(wordDisplayDisabledByGroupT(index)) return null;
+    return (verbals[index]?.on || slotIsDouble(index)) ? 'left' : null;
+  }
+
+  function lastSlotOf(index){
+    if(index < 0 || index >= tokens.length) return null;
+    if(wordDisplayDisabledByGroupT(index)) return null;
+    return (verbals[index]?.on || slotIsDouble(index)) ? 'right' : null;
+  }
+
+  function setCursorPosition(index, slot = null){
+    if(tokens.length === 0) return;
+
+    cursor = Math.max(0, Math.min(tokens.length, index));
+    clearGroupCursor();
+
+    if(cursor === tokens.length){
+      cursorSlot = null;
+      render();
+      document.querySelector('.word.dummy-word')?.scrollIntoView({block:'nearest', inline:'nearest'});
+      return;
+    }
+
+    if(wordDisplayDisabledByGroupT(cursor)){
+      const originalIndex = cursor;
+      selectGroupTForWord(
+        originalIndex,
+        slot === 'right' ? 'right' : (slot === 'left' ? 'left' : null)
+      );
+      render();
+      groupLayer.querySelector(
+        `[data-group-work="${groupCursorId}"][data-group-slot="${groupCursorSlot}"]`
+      )?.scrollIntoView({block:'nearest', inline:'nearest'});
+      return;
+    }
+
+    if(verbals[cursor]?.on || slotIsDouble(cursor)){
+      cursorSlot = slot === 'right' ? 'right' : 'left';
+    }else{
+      cursorSlot = null;
+    }
+
+    render();
+
+    const target = cursorSlot
+      ? document.querySelector(`.word[data-index="${cursor}"] .verbal-${cursorSlot}`)
+      : document.querySelector(`.word[data-index="${cursor}"]`);
+    target?.scrollIntoView({block:'nearest', inline:'nearest'});
+  }
+
+  // カーソル移動の唯一の入口。NORMAL / r終点選択 / V部分確定後の移動は全てここを通す.
+  // direction: 'left' | 'right' | 'down' | 'up'
+  function moveCursor(direction){
+    if(direction === 'left' || direction === 'right'){
+      const delta = direction === 'left' ? -1 : 1;
+
+          if(tokens.length === 0) return;
+
+          // 文末ダミーは横移動上の最後の1位置。
+          if(cursor === tokens.length){
+            if(delta < 0){
+              const last = tokens.length - 1;
+              const lg = groupTForWord(last);
+              if(lg){
+                enterFromHorizontal(last, 'right');
+              }else{
+                enterFromHorizontal(last, lastSlotOf(last));
+              }
+            }
+            return;
+          }
+
+          if(groupCursorId !== null){
+            const selectedGroup = groupById(groupCursorId);
+            const gv = ensureGroupVerbal(selectedGroup);
+            if(gv?.on){
+              if(groupCursorSlot === 'left' && delta > 0){
+                groupCursorSlot = 'right';
+                groupCursorTarget = 'right';
+                render();
+                return;
+              }
+              if(groupCursorSlot === 'right' && delta < 0){
+                groupCursorSlot = 'left';
+                groupCursorTarget = 'left';
+                render();
+                return;
+              }
+            }
+
+            clearGroupCursor();
+            const g = selectedGroup || groupForWord(cursor);
+            if(delta < 0){
+              const target = g ? g.start - 1 : cursor - 1;
+              if(target >= 0) enterFromHorizontal(target, lastSlotOf(target));
+            }else{
+              const target = g ? g.end + 1 : cursor + 1;
+              if(target <= tokens.length) enterFromHorizontal(
+                target,
+                target < tokens.length ? firstSlotOf(target) : null
+              );
+            }
+            return;
+          }
+
+          const d = ensureWorkSlot(cursor);
+          if(d?.enabled && d.kind === 'double'){
+            if(cursorSlot === 'left'){
+              if(delta > 0){
+                cursorSlot = 'right';
+                render();
+              }else if(cursor > 0){
+                const prev = cursor - 1;
+                enterFromHorizontal(prev, lastSlotOf(prev));
+              }
+              return;
+            }
+            if(delta < 0){
+              cursorSlot = 'left';
+              render();
+            }else{
+              const next = cursor + 1;
+              if(next <= tokens.length){
+                enterFromHorizontal(
+                  next,
+                  next < tokens.length ? firstSlotOf(next) : null
+                );
+              }
+            }
+            return;
+          }
+
+          const v = ensureVerbal();
+
+          if(v?.on){
+            if(cursorSlot === 'left'){
+              if(delta > 0){
+                cursorSlot = 'right';
+                render();
+              }else if(cursor > 0){
+                const prev = cursor - 1;
+                enterFromHorizontal(prev, lastSlotOf(prev));
+              }
+              return;
+            }
+
+            if(delta < 0){
+              cursorSlot = 'left';
+              render();
+            }else{
+              const next = cursor + 1;
+              if(next <= tokens.length){
+                enterFromHorizontal(
+                  next,
+                  next < tokens.length ? firstSlotOf(next) : null
+                );
+              }
+            }
+            return;
+          }
+
+          if(delta < 0 && cursor > 0){
+            const prev = cursor - 1;
+            const pg = groupTForWord(prev);
+            if(pg){
+              enterFromHorizontal(prev, 'right');
+            }else{
+              enterFromHorizontal(prev, lastSlotOf(prev));
+            }
+          }else if(delta > 0){
+            const next = cursor + 1;
+            if(next <= tokens.length){
+              const ng = next < tokens.length ? groupTForWord(next) : null;
+              if(ng){
+                enterFromHorizontal(next, 'left');
+              }else{
+                enterFromHorizontal(
+                  next,
+                  next < tokens.length ? firstSlotOf(next) : null
+                );
+              }
+            }
+          }
+  
+      return;
+    }
+
+    const delta = direction === 'up' ? -1 : 1;
+
+        if(cursor >= tokens.length) return;
+
+        if(delta > 0){
+          // j は「現在のslot/構造を包含する最も内側の構造」へ上がる。
+          // T の left/right は token 全体ではなく、そのslot自身を包含判定に使う。
+          if(groupCursorId === null){
+            const ref = currentDisplayRef();
+            const g = groupsContainingRef(ref)[0] || null;
+            if(g){
+              setGroupCursor(g.id, ensureGroupVerbal(g).on ? 'left' : (g.mark ? 'single' : 'underline'));
+              render();
+              return;
+            }
+            // 包含構造がなければ、次の入力行へ移動する。
+            moveToAdjacentSentence(1);
+            return;
+          }
+
+          const currentGroup = groupById(groupCursorId);
+          let parent = null;
+
+          if(groupCursorSlot === 'left' || groupCursorSlot === 'right'){
+            // T の左右slotからは、そのslotそのものを含む構造へ上がる。
+            parent = groupsContainingRef(
+              {group:groupCursorId, slot:groupCursorSlot},
+              groupCursorId
+            )[0] || null;
+          }else{
+            // 通常下線の標識からは、その下線全体を含む構造へ上がる。
+            parent = parentGroupOf(currentGroup);
+          }
+
+          if(parent){
+            setGroupCursor(parent.id, ensureGroupVerbal(parent).on ? 'left' : (parent.mark ? 'single' : 'underline'));
+            render();
+            return;
+          }
+          // これ以上外側の構造がなければ、次の入力行へ移動する。
+          moveToAdjacentSentence(1);
+          return;
+        }
+
+        if(delta < 0 && groupCursorId === null){
+          // 包含構造の内側にいない通常slotでは、前の入力行へ移動する。
+          moveToAdjacentSentence(-1);
+          return;
+        }
+
+        if(delta < 0 && groupCursorId !== null){
+          const g = groupById(groupCursorId);
+
+          // 下線全体がTの間、内側の単語には働きの標識が存在しないため、
+          // kでも内側へは移動しない。カーソルはTの左右どちらかに留める。
+          if(g && ensureGroupVerbal(g).on){
+            if(groupCursorSlot !== 'left' && groupCursorSlot !== 'right'){
+              groupCursorSlot = 'left';
+              groupCursorTarget = 'left';
+            }
+            render();
+            return;
+          }
+
+          // 通常のV下線なら、上下移動として内側の編集領域へ入る。
+          // 個別標識がまだ無くても、最左の空の働きの標識位置を選択できる。
+          const target = leftmostWorkPositionInGroup(g);
+          clearGroupCursor();
+
+          if(target){
+            cursor = target.word;
+            cursorSlot = target.slot;
+          }
+          render();
+        }
+  
+  }
+
+  function leftmostWorkPositionInGroup(g){
+    if(!g) return null;
+    if(ensureGroupVerbal(g).on) return null;
+
+    // group が実際に消費している token-side slot のうち最左を返す。
+    // g.start の token 全体へ暗黙に展開しない。
+    for(const ref of selectionDisplayOrder()){
+      if(ref.group != null) continue;
+      if(refInsideGroup(ref,g)) return cloneRef(ref);
+    }
+    return null;
+  }
+
+  function groupLogicalSpan(g){
+    if(!g) return Infinity;
+    normalizeGroupRefs(g);
+    // 実際に選ばれた区間の長さの合計。離れた空白部分は含めない。
+    return g.segments.reduce((sum,seg) =>
+      sum + Math.abs(refOrderKey(seg.endRef)-refOrderKey(seg.startRef)) + 1, 0
+    );
+  }
+
+  function groupsContainingRef(ref, exceptGroupId = null){
+    if(!ref) return [];
+    return groups
+      .filter(g => g.id !== exceptGroupId && refInsideGroup(ref, g))
+      .sort((a,b) => groupLogicalSpan(a) - groupLogicalSpan(b) || b.id - a.id);
+  }
+
+  function groupContainedBy(inner, outer){
+    if(!inner || !outer || inner.id===outer.id) return false;
+    return groupSegments(inner).every(seg =>
+      refInsideGroup(seg.startRef, outer) && refInsideGroup(seg.endRef, outer)
+    );
+  }
+
+  function parentGroupOf(g){
+    if(!g) return null;
+    normalizeGroupRefs(g);
+    return groups
+      .filter(other => groupContainedBy(g, other))
+      .sort((a,b) => groupLogicalSpan(a) - groupLogicalSpan(b) || b.id - a.id)[0] || null;
+  }
+
+  function selectDisplayRef(ref){
+    if(!ref) return false;
+    if(ref.group != null){
+      const g = groupById(ref.group);
+      if(!g) return false;
+      setGroupCursor(g.id, ref.slot || (g.mark ? 'single' : 'underline'));
+      render();
+      requestAnimationFrame(() => {
+        getDisplayElement(ref)?.scrollIntoView({block:'nearest', inline:'nearest'});
+      });
+      return true;
+    }
+    if(ref.word == null || ref.word < 0 || ref.word >= tokens.length) return false;
+    setCursorPosition(ref.word, ref.slot || null);
+    return true;
+  }
+
+  function displayRefsInSentence(sentenceIndex){
+    const range = sentenceRanges.find(r => r.index === sentenceIndex);
+    if(!range || range.start >= range.end) return [];
+    const refs = [];
+
+    for(let i = range.start; i < range.end; i++){
+      const v = verbals[i];
+      const d = ensureWorkSlot(i);
+      if(v?.on){
+        for(const side of ['left','right']){
+          const ref = {word:i, slot:side};
+          if(isValidDisplayRef(ref) && getDisplayElement(ref)) refs.push(ref);
+        }
+      }else if(d?.enabled && d.kind === 'double'){
+        for(const side of ['left','right']){
+          const ref = {word:i, slot:side};
+          if(isValidDisplayRef(ref) && getDisplayElement(ref)) refs.push(ref);
+        }
+      }else{
+        const ref = {word:i, slot:null};
+        if(isValidDisplayRef(ref) && getDisplayElement(ref)) refs.push(ref);
+      }
+    }
+
+    // 語のslotが外側Tによって隠れている場合も、実際に表示されている
+    // group側のslotを行移動の候補にする。
+    for(const g of groups){
+      if(sentenceOfRef(groupSegments(g)[0]?.startRef) !== sentenceIndex) continue;
+      const gv = ensureGroupVerbal(g);
+      if(gv.on){
+        for(const side of ['left','right']){
+          const ref = {group:g.id, slot:side};
+          if(isValidDisplayRef(ref) && getDisplayElement(ref)) refs.push(ref);
+        }
+      }else{
+        const ref = {group:g.id, slot:null};
+        if(isValidDisplayRef(ref) && getDisplayElement(ref)) refs.push(ref);
+      }
+    }
+    return refs;
+  }
+
+  function moveToAdjacentSentence(delta){
+    const currentRef = currentDisplayRef();
+    let currentSentence = sentenceOfRef(currentRef);
+    if(currentSentence < 0 && cursor < tokens.length) currentSentence = sentenceOfWord(cursor);
+    if(currentSentence < 0) return false;
+
+    const currentEl = getDisplayElement(currentRef);
+    const currentX = currentEl ? rectInWorkspace(currentEl).cx : null;
+
+    for(let si = currentSentence + delta; si >= 0 && si < sentenceRanges.length; si += delta){
+      const refs = displayRefsInSentence(si);
+      if(!refs.length) continue;
+
+      let target = refs[0];
+      if(currentX != null){
+        let bestDistance = Infinity;
+        for(const ref of refs){
+          const el = getDisplayElement(ref);
+          if(!el) continue;
+          const distance = Math.abs(rectInWorkspace(el).cx - currentX);
+          if(distance < bestDistance){
+            bestDistance = distance;
+            target = ref;
+          }
+        }
+      }
+      return selectDisplayRef(target);
+    }
+    return false;
+  }
+
+
+  // 個々の編集関数が履歴登録を忘れても取りこぼさないよう、
+  // NORMALモードのキー操作を文書状態の差分として自動記録する。
+  workspace.addEventListener('keydown', (e) => {
+    if(mode !== 'NORMAL' || historyRestoring) return;
+    const isUndo = e.key === 'u' && !pendingKeys && !e.ctrlKey && !e.metaKey && !e.altKey;
+    const isRedo = (e.key === 'r' || e.key === 'R') && e.ctrlKey && !e.metaKey && !e.altKey;
+    if(isUndo || isRedo) return;
+    const before = captureMarkState();
+    queueMicrotask(() => pushMarkUndo(before));
+  }, true);
+
+  // INSERTでの英文編集も1回の beforeinput/input を1編集として履歴化する。
+  let inputHistoryBefore = null;
+  input.addEventListener('beforeinput', () => {
+    if(historyRestoring) return;
+    inputHistoryBefore = captureMarkState();
+  });
+
+  input.addEventListener('input', syncFromInput);
+  input.addEventListener('input', () => {
+    if(!inputHistoryBefore || historyRestoring) return;
+    const before = inputHistoryBefore;
+    inputHistoryBefore = null;
+    pushMarkUndo(before);
+  });
+
+  // ツールバー操作もキーボード操作と同じ編集履歴に入れる。
+  document.querySelector('.toolbar')?.addEventListener('click', () => {
+    if(historyRestoring) return;
+    const before = captureMarkState();
+    queueMicrotask(() => pushMarkUndo(before));
+  }, true);
+
+  input.addEventListener('keydown', (e) => {
+    if(e.key === 'Escape'){
+      e.preventDefault();
+      setMode('NORMAL');
+    }
+  });
+
+  function cancelPending(){
+    pendingKeys = '';
+    pendingCursor = null;
+    pendingSlot = null;
+    numericPending = false;
+    verbalEditingSide = null;
+    verbalEditingBuffer = '';
+    verbalEditingOriginal = '';
+    render();
+  }
+
+  function commitPending(){
+    const historyBefore = captureMarkState();
+    if(pendingKeys && pendingGroupId !== null){
+      const g = groupById(pendingGroupId);
+      if(g){
+        const gv = ensureGroupVerbal(g);
+        if(gv.on && (pendingGroupSlot === 'left' || pendingGroupSlot === 'right')){
+          if(tSlot(gv,pendingGroupSlot)?.enabled) setTSlotText(gv, pendingGroupSlot, pendingKeys);
+        }else{
+          g.mark = pendingKeys;
+        }
+      }
+    }else if(pendingKeys && pendingCursor !== null && tokens[pendingCursor]){
+      const slot = ensureWorkSlot(pendingCursor);
+      if(pendingSlot && slot?.enabled && slot.kind === 'double'){
+        slot[pendingSlot] = pendingKeys;
+      }else if(pendingSlot && verbals[pendingCursor]?.on && tSlot(verbals[pendingCursor],pendingSlot)?.enabled){
+        setTSlotText(verbals[pendingCursor], pendingSlot, pendingKeys);
+      }else if(!verbals[pendingCursor]?.on && slot?.enabled && slot.kind === 'single'){
+        slot.text = pendingKeys;
+      }
+    }
+    pendingKeys = '';
+    pendingCursor = null;
+    pendingSlot = null;
+    pendingGroupId = null;
+    pendingGroupSlot = null;
+    cleanupArrows();
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function numberMarkFromKey(key){
+    const map = {'1':'(1)','2':'(2)','3':'(3)','4':'(4)','5':'(5)'};
+    return map[key] || null;
+  }
+
+  function assignPendingMark(value){
+    const historyBefore = captureMarkState();
+    if(pendingGroupId !== null){
+      const g = groupById(pendingGroupId);
+      if(g){
+        const gv = ensureGroupVerbal(g);
+        if(gv.on && (pendingGroupSlot === 'left' || pendingGroupSlot === 'right')){
+          if(tSlot(gv,pendingGroupSlot)?.enabled) setTSlotText(gv, pendingGroupSlot, value);
+        }else{
+          g.mark = value;
+        }
+      }
+    }else{
+      if(pendingCursor === null) return;
+      const slot = ensureWorkSlot(pendingCursor);
+      if(pendingSlot && slot?.enabled && slot.kind === 'double'){
+        slot[pendingSlot] = value;
+      }else if(pendingSlot && verbals[pendingCursor]?.on && tSlot(verbals[pendingCursor],pendingSlot)?.enabled){
+        setTSlotText(verbals[pendingCursor], pendingSlot, value);
+      }else if(!verbals[pendingCursor]?.on && slot?.enabled && slot.kind === 'single'){
+        slot.text = value;
+      }
+    }
+    pendingKeys = '';
+    pendingCursor = null;
+    pendingSlot = null;
+    pendingGroupId = null;
+    pendingGroupSlot = null;
+    cleanupArrows();
+    render();
+    pushMarkUndo(historyBefore);
+  }
+
+  function handleMarkSequence(key){
+    if(!pendingKeys
+      && groupCursorId === null
+      && cursor < tokens.length
+      && wordDisplayDisabledByGroupT(cursor)){
+      // 下線全体がTの間も各単語の標識スロットは保持するが、enabled=false なので編集対象にしない。
+      return true;
+    }
+
+    const simpleMarkMap = {
+      v:'V',
+      o:'O',
+      m:'M'
+    };
+
+    if(!pendingKeys && simpleMarkMap[key]){
+      setMark(simpleMarkMap[key]);
+      return true;
+    }
+
+    // a はまず「形容詞」として薄く表示する。
+    // 続けて d が来たら ad、c が来たら aC、u x が来たら aux に分岐する。
+    if(!pendingKeys){
+      if(key === 's'){
+        pendingKeys = 's';
+        pendingCursor = cursor;
+        pendingSlot = cursorSlot;
+        pendingGroupId = groupCursorId;
+        pendingGroupSlot = groupCursorSlot;
+        if(groupCursorId !== null && !ensureGroupVerbal(groupById(groupCursorId))?.on){
+          groupCursorTarget = 'single';
+        }
+        render();
+        return true;
+      }
+      if(key === 'a'){
+        pendingKeys = 'a';
+        pendingCursor = cursor;
+        pendingSlot = cursorSlot;
+        pendingGroupId = groupCursorId;
+        pendingGroupSlot = groupCursorSlot;
+        if(groupCursorId !== null && !ensureGroupVerbal(groupById(groupCursorId))?.on){
+          groupCursorTarget = 'single';
+        }
+        render();
+        return true;
+      }
+      if(key === 'n'){
+        pendingKeys = 'n';
+        pendingCursor = cursor;
+        pendingSlot = cursorSlot;
+        pendingGroupId = groupCursorId;
+        pendingGroupSlot = groupCursorSlot;
+        if(groupCursorId !== null && !ensureGroupVerbal(groupById(groupCursorId))?.on){
+          groupCursorTarget = 'single';
+        }
+        render();
+        return true;
+      }
+      if(key === 'c'){
+        pendingKeys = 'c';
+        pendingCursor = cursor;
+        pendingSlot = cursorSlot;
+        pendingGroupId = groupCursorId;
+        pendingGroupSlot = groupCursorSlot;
+        if(groupCursorId !== null && !ensureGroupVerbal(groupById(groupCursorId))?.on){
+          groupCursorTarget = 'single';
+        }
+        render();
+        return true;
+      }
+      if(key === 'p'){
+        pendingKeys = 'p';
+        pendingCursor = cursor;
+        pendingSlot = cursorSlot;
+        pendingGroupId = groupCursorId;
+        pendingGroupSlot = groupCursorSlot;
+        if(groupCursorId !== null && !ensureGroupVerbal(groupById(groupCursorId))?.on){
+          groupCursorTarget = 'single';
+        }
+        render();
+        return true;
+      }
+      return false;
+    }
+
+    // s' で S'。s 単独なら従来どおり S。
+    if(pendingKeys === 's'){
+      if(key === "'"){
+        assignPendingMark("S'");
+        return true;
+      }
+      assignPendingMark('S');
+      return handleMarkSequence(key);
+    }
+
+    if(pendingKeys === 'a'){
+      if(key === 'd' || key === 'D'){
+        // ad は ado（副詞的目的格）へさらに分岐できるため、ここでは保留する。
+        pendingKeys = 'ad';
+        render();
+        return true;
+      }
+      if(key === 'c' || key === 'C'){
+        assignPendingMark('aC');
+        return true;
+      }
+      if(key === 'u'){
+        pendingKeys = 'au';
+        render();
+        return true;
+      }
+      // 別の入力が来たら、a を形容詞として確定してから、その入力を処理する。
+      commitPending();
+      return handleMarkSequence(key);
+    }
+
+
+    if(pendingKeys === 'ad'){
+      if(key === 'o' || key === 'O'){
+        // ado も入力完了までは確定しない。表示上だけ保留状態を伸ばす。
+        pendingKeys = 'ado';
+        render();
+        return true;
+      }
+      // ad は Enter・移動・別コマンドなど、入力が終わった時点で初めて確定する。
+      assignPendingMark('ad');
+      return handleMarkSequence(key);
+    }
+
+    if(pendingKeys === 'ado'){
+      // ado も Enter・移動・別コマンドなど、入力が終わった時点で初めて確定する。
+      assignPendingMark('副詞的目的格');
+      return handleMarkSequence(key);
+    }
+
+    if(pendingKeys === 'au'){
+      if(key === 'x'){
+        assignPendingMark('aux');
+        return true;
+      }
+      // aux にならなかったら、直前の a は形容詞として確定する。
+      pendingKeys = 'a';
+      commitPending();
+      return handleMarkSequence(key);
+    }
+
+    if(pendingKeys === 'n'){
+      if(key === 'c' || key === 'C'){
+        assignPendingMark('nC');
+        return true;
+      }
+      commitPending();
+      return handleMarkSequence(key);
+    }
+
+    // c はまず C の候補として保留する。
+    // 続けて o n と入力されたときだけ接続詞「接」に分岐する。
+    if(pendingKeys === 'c'){
+      if(key === 'o'){
+        pendingKeys = 'co';
+        render();
+        return true;
+      }
+      // c 単独は C として確定。
+      assignPendingMark('C');
+      return handleMarkSequence(key);
+    }
+
+    if(pendingKeys === 'co'){
+      if(key === 'n'){
+        assignPendingMark('接');
+        return true;
+      }
+      assignPendingMark('C');
+      return handleMarkSequence(key);
+    }
+
+    // p r e で前置詞「前」。
+    if(pendingKeys === 'p'){
+      if(key === 'r'){
+        pendingKeys = 'pr';
+        render();
+        return true;
+      }
+      commitPending();
+      return handleMarkSequence(key);
+    }
+
+    if(pendingKeys === 'pr'){
+      if(key === 'e'){
+        assignPendingMark('前');
+        return true;
+      }
+      commitPending();
+      return handleMarkSequence(key);
+    }
+
+    cancelPending();
+    return false;
+  }
+
+
+  workspace.addEventListener('keydown', (e) => {
+    if(mode !== 'NORMAL') return;
+
+    // Vim準拠: u = undo, Ctrl-r = redo
+    // pending中の a→u→x では u を aux の入力文字として使う。
+    if(e.key === 'u' && !pendingKeys && !e.ctrlKey && !e.metaKey && !e.altKey){
+      e.preventDefault();
+      undoMarkEdit();
+      return;
+    }
+    if((e.key === 'r' || e.key === 'R') && e.ctrlKey && !e.metaKey && !e.altKey){
+      e.preventDefault();
+      redoMarkEdit();
+      return;
+    }
+
+    if(verbalEditingSide){
+      handleVerbalEditingKey(e);
+      return;
+    }
+
+    const key = e.key;
+
+    if(gapMode){
+      if(key === 'Escape' || key === 'Enter' || key === 'b'){
+        e.preventDefault();
+        leaveGapMode();
+        return;
+      }
+      if(key === 'h'){
+        e.preventDefault();
+        moveGap(-1);
+        return;
+      }
+      if(key === 'l'){
+        e.preventDefault();
+        moveGap(1);
+        return;
+      }
+      if(key === '0'){
+        e.preventDefault();
+        gapCursor = 0;
+        render();
+        return;
+      }
+      if(key === '$'){
+        e.preventDefault();
+        gapCursor = tokens.length;
+        render();
+        return;
+      }
+      if(['[',']','<','>','(',')'].includes(key)){
+        e.preventDefault();
+        appendGapModeSymbol(key);
+        return;
+      }
+      if(key === 'Backspace'){
+        e.preventDefault();
+        backspaceGapModeSymbol();
+        return;
+      }
+      if(key === 'x' || key === 'Delete'){
+        e.preventDefault();
+        clearGapModeSymbol();
+        return;
+      }
+      e.preventDefault();
+      return;
+    }
+
+    if(groupSelection){
+      if(key === 'Escape'){
+        e.preventDefault();
+        cancelGroupSelection();
+        return;
+      }
+      if(key === 'Enter'){
+        e.preventDefault();
+        commitGroupSelection();
+        return;
+      }
+      if(key === 'V'){
+        e.preventDefault();
+        toggleGroupSelectionSegment();
+        return;
+      }
+      if(key === 'h'){
+        e.preventDefault();
+        moveGroupSelection(-1);
+        return;
+      }
+      if(key === 'l'){
+        e.preventDefault();
+        moveGroupSelection(1);
+        return;
+      }
+      e.preventDefault();
+      return;
+    }
+
+    if(arrowDraft){
+      if(key === 'Escape'){
+        e.preventDefault();
+        cancelArrow();
+        return;
+      }
+      if(key === 'Enter'){
+        e.preventDefault();
+        commitArrow();
+        return;
+      }
+      // 矢印の終点選択中も h/l/j/k/0/$ で通常通り移動できる。
+      if(key === 'h'){
+        e.preventDefault();
+        moveCursor('left');
+        return;
+      }
+      if(key === 'l'){
+        e.preventDefault();
+        moveCursor('right');
+        return;
+      }
+      if(key === 'j'){
+        e.preventDefault();
+        moveCursor('down');
+        return;
+      }
+      if(key === 'k'){
+        e.preventDefault();
+        moveCursor('up');
+        return;
+      }
+      if(key === '0'){
+        e.preventDefault();
+        setCursorPosition(0, firstSlotOf(0));
+        return;
+      }
+      if(key === '$'){
+        e.preventDefault();
+        setCursorPosition(tokens.length, null);
+        return;
+      }
+      // rをもう一度押した場合は始点を選び直す。
+      if(key === 'r'){
+        e.preventDefault();
+        cancelArrow();
+        beginArrow();
+        return;
+      }
+      e.preventDefault();
+      return;
+    }
+
+    if(['[',']','<','>','(',')'].includes(key)){
+      e.preventDefault();
+      appendBoundarySymbol(key);
+      return;
+    }
+
+    if(numericPending){
+      e.preventDefault();
+      if(['3','4','5'].includes(key)){
+        setMark('-' + numberMarkFromKey(key));
+      }
+      numericPending = false;
+      render();
+      return;
+    }
+
+    if(key === 'Escape'){
+      e.preventDefault();
+      cancelPending();
+    }else if(pendingKeys){
+      e.preventDefault();
+      if(handleMarkSequence(key)) return;
+      // 分岐に使わないキーなら、保留中の記号を確定した上で通常操作へ進む。
+      if(key === 'h') moveCursor('left');
+      else if(key === 'l') moveCursor('right');
+      else if(key === 'j') moveCursor('down');
+      else if(key === 'k') moveCursor('up');
+      else if(key === '0'){ setCursorPosition(0, firstSlotOf(0)); }
+      else if(key === '$'){
+        setCursorPosition(tokens.length, null);
+      }
+      else if(key === 'x') setMark('');
+      else if(key === 'X') clearVerbal();
+      else if(['1','2','3','4','5'].includes(key)) setMark(numberMarkFromKey(key));
+      else if(key === '-') { numericPending = true; render(); }
+      else if(key === 'b') enterGapMode();
+      else if(key === 'V') beginGroupSelection();
+      else if(key === 'U') ungroupCurrent();
+      else if(['[',']','<','>','(',')'].includes(key)) appendBoundarySymbol(key);
+      else if(key === 'r') beginArrow();
+      else if(key === 'R') deleteArrowFromCurrent();
+      else if(key === 'd') toggleDual();
+      else if(key === 't') toggleVerbal();
+      else if(key === 'f') setVerbalSide('left');
+      else if(key === 'g') setVerbalSide('right');
+      else if(key === 'i') setMode('INSERT');
+    }else if(key === 'h'){
+      e.preventDefault();
+      moveCursor('left');
+    }else if(key === 'l'){
+      e.preventDefault();
+      moveCursor('right');
+    }else if(key === 'j'){
+      e.preventDefault();
+      moveCursor('down');
+    }else if(key === 'k'){
+      e.preventDefault();
+      moveCursor('up');
+    }else if(key === '0'){
+      e.preventDefault();
+      setCursorPosition(0, firstSlotOf(0));
+    }else if(key === '$'){
+      e.preventDefault();
+      setCursorPosition(tokens.length, null);
+    }else if(['s','v','o','c','m','a','n','p'].includes(key)){
+      e.preventDefault();
+      handleMarkSequence(key);
+    }else if(['1','2','3','4','5'].includes(key)){
+      e.preventDefault();
+      setMark(numberMarkFromKey(key));
+    }else if(key === '-'){
+      e.preventDefault();
+      numericPending = true;
+      render();
+    }else if(key === 'b'){
+      e.preventDefault();
+      enterGapMode();
+    }else if(key === 'V'){
+      e.preventDefault();
+      beginGroupSelection();
+    }else if(key === 'U'){
+      e.preventDefault();
+      ungroupCurrent();
+    }else if(key === 'r'){
+      e.preventDefault();
+      beginArrow();
+    }else if(key === 'R'){
+      e.preventDefault();
+      deleteArrowFromCurrent();
+    }else if(key === 'd'){
+      e.preventDefault();
+      toggleDual();
+    }else if(key === 't'){
+      e.preventDefault();
+      toggleVerbal();
+    }else if(key === 'f'){
+      e.preventDefault();
+      setVerbalSide('left');
+    }else if(key === 'g'){
+      e.preventDefault();
+      setVerbalSide('right');
+    }else if(key === 'X'){
+      e.preventDefault();
+      clearVerbal();
+    }else if(key === 'x'){
+      e.preventDefault();
+      setMark('');
+    }else if(key === 'i'){
+      e.preventDefault();
+      setMode('INSERT');
+    }
+  });
+
+
+  document.querySelectorAll('[data-mark]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setMode('NORMAL');
+      setMark(btn.dataset.mark);
+    });
+  });
+
+  document.getElementById('verbalToggle').addEventListener('click', () => {
+    setMode('NORMAL');
+    toggleVerbal();
+  });
+
+  document.getElementById('verbalLeft').addEventListener('click', () => {
+    setMode('NORMAL');
+    setVerbalSide('left');
+  });
+
+  document.getElementById('verbalRight').addEventListener('click', () => {
+    setMode('NORMAL');
+    setVerbalSide('right');
+  });
+
+  document.getElementById('clearMark').addEventListener('click', () => {
+    setMode('NORMAL');
+    setMark('');
+  });
+
+  document.getElementById('clearAll').addEventListener('click', () => {
+    workSlots = workSlots.map(() => makeWorkSlot());
+    verbals = verbals.map(() => (makeTState(false)));
+    gaps = gaps.map(() => '');
+    groups = [];
+    groupSelection = null;
+    clearGroupCursor();
+    arrows = [];
+    arrowDraft = null;
+    setMode('NORMAL');
+  });
+
+  window.addEventListener('resize', () => requestAnimationFrame(() => { drawGroups(); drawArrows(); }));
+  workspace.addEventListener('scroll', () => requestAnimationFrame(() => { drawGroups(); drawArrows(); }));
+
+  syncFromInput();
+  workspace.focus();
+})();
+</script>
+</body>
+</html>
