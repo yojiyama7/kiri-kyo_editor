@@ -15,8 +15,9 @@
     --cursor:rgba(219,234,254,.55);
     --cursor-outline:rgba(37,99,235,.32);
     --mark:#7c2d12;
+    --slot-min-width:28px;
   }
-  *{box-sizing:border-box}
+  *, *::before, *::after{box-sizing:border-box}
   body{
     margin:0;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Noto Sans Mono CJK JP", monospace;
@@ -130,7 +131,7 @@
   }
   .slot-group-selecting-fixed{
     background:rgba(254,215,170,.50);
-    border:2px solid rgba(234,88,12,.76);
+    border-color:rgba(234,88,12,.76);
     border-radius:4px;
     box-sizing:border-box;
     z-index:7;
@@ -190,12 +191,15 @@
   }
   .group-mark{
     position:absolute;
-    min-width:24px;
+    min-width:var(--slot-min-width);
     height:20px;
     display:inline-flex;
     align-items:baseline;
     justify-content:center;
     box-sizing:border-box;
+    border:2px solid transparent;
+    border-radius:4px;
+    padding:0 3px;
     color:var(--mark);
     font-size:14px;
     line-height:18px;
@@ -214,10 +218,7 @@
   }
   .group-mark.group-mark-cursor{
     background:var(--cursor);
-    border:2px solid var(--cursor-outline);
-    border-radius:4px;
-    padding:0 3px;
-    box-sizing:border-box;
+    border-color:var(--cursor-outline);
     z-index:6;
   }
   .group-mark.pending-mark{
@@ -269,13 +270,13 @@
     white-space:nowrap;
     pointer-events:auto;
     cursor:pointer;
+    border:2px solid transparent;
+    border-radius:4px;
   }
   /* T の内部slotは横棒の端点〜中央の縦棒までをそのまま占める。 */
   .group-verbal-slot-cursor{
     background:var(--cursor);
-    border:2px solid var(--cursor-outline);
-    border-radius:4px;
-    box-sizing:border-box;
+    border-color:var(--cursor-outline);
     z-index:6;
   }
 
@@ -285,7 +286,7 @@
     display:flex;
     flex-wrap:wrap;
     align-items:flex-start;
-    gap:14px 10px;
+    gap:14px 8px;
     line-height:1;
   }
 
@@ -385,16 +386,14 @@
   .mark.slot-group-selecting-fixed,
   .mark.slot-group-selection-cursor{
     width:100%;
-    min-width:20px;
+    min-width:var(--slot-min-width);
     box-sizing:border-box;
     padding:0 3px;
     position:relative;
   }
   .mark.mark-cursor{
     background:var(--cursor);
-    border:2px solid var(--cursor-outline);
-    border-radius:4px;
-    box-sizing:border-box;
+    border-color:var(--cursor-outline);
     z-index:5;
   }
   .word.dummy-word{
@@ -434,7 +433,7 @@
     grid-column:1;
     align-self:start;
     height:20px;
-    min-width:20px;
+    min-width:var(--slot-min-width);
     display:inline-flex;
     align-items:baseline;
     justify-content:center;
@@ -443,6 +442,10 @@
     font-size:14px;
     line-height:18px;
     white-space:nowrap;
+    box-sizing:border-box;
+    border:2px solid transparent;
+    border-radius:4px;
+    padding:0 3px;
   }
   .mark::before{
     content:"\200B";
@@ -466,7 +469,7 @@
     align-self:start;
     position:relative;
     width:100%;
-    min-width:58px;
+    min-width:88px;
     height:20px;
   }
   .dual-left,
@@ -496,10 +499,7 @@
   }
   .dual-slot-cursor{
     background:var(--cursor);
-    border:2px solid var(--cursor-outline);
-    border-radius:4px;
-    box-sizing:border-box;
-    padding:0 4px;
+    border-color:var(--cursor-outline);
     position:absolute;
     z-index:5;
   }
@@ -518,7 +518,7 @@
     align-self:start;
     position:relative;
     width:100%;
-    min-width:66px;
+    min-width:82px;
     height:38px;
     pointer-events:none;
   }
@@ -562,6 +562,8 @@
     color:var(--mark);
     text-align:center;
     white-space:nowrap;
+    border:2px solid transparent;
+    border-radius:4px;
   }
   .verbal-left::before,
   .verbal-right::before{
@@ -585,9 +587,7 @@
   }
   .verbal-slot-cursor{
     background:var(--cursor);
-    border:2px solid var(--cursor-outline);
-    border-radius:4px;
-    box-sizing:border-box;
+    border-color:var(--cursor-outline);
     position:absolute;
     z-index:5;
   }
@@ -614,6 +614,28 @@
     min-height:20px;
     height:20px !important;
     box-sizing:border-box;
+  }
+
+  /* / による任意文字列入力。実体はIMEが使えるネイティブinputだが、
+     slot上では入力枠を一切見せない。 */
+  .direct-slot-input{
+    position:absolute;
+    z-index:30;
+    height:20px;
+    box-sizing:border-box;
+    margin:0;
+    padding:0 2px;
+    border:0;
+    outline:0;
+    box-shadow:none;
+    border-radius:0;
+    background:var(--panel);
+    color:var(--mark);
+    font:inherit;
+    font-size:14px;
+    line-height:20px;
+    font-weight:700;
+    text-align:center;
   }
 
   .status{
@@ -749,8 +771,6 @@
       <button data-mark="-(4)">-(4)</button>
       <button data-mark="-(5)">-(5)</button>
       <button id="verbalToggle">準動詞T</button>
-      <button id="verbalLeft">T左入力</button>
-      <button id="verbalRight">T右入力</button>
       <button id="clearMark">記号削除</button>
       <button id="clearAll">全記号削除</button>
     </div>
@@ -786,8 +806,7 @@
       <span><kbd>a</kbd><kbd>u</kbd><kbd>x</kbd> aux</span>
       <span><kbd>n</kbd><kbd>c</kbd> nC</span>
       <span><kbd>t</kbd> 準動詞T</span>
-      <span><kbd>f</kbd> T左入力</span>
-      <span><kbd>g</kbd> T右入力</span>
+      <span><kbd>/</kbd> 任意文字列を直接入力</span>
       <span><kbd>Enter</kbd> T入力確定</span>
       <span><kbd>Esc</kbd> T入力取消</span>
       <span><kbd>1</kbd>〜<kbd>5</kbd> (1)〜(5)</span>
@@ -823,6 +842,7 @@
 
     <h3>働きの標識</h3>
     <ul>
+      <li><kbd>/</kbd>：現在のslotへ任意の文字列を直接入力します。通常slot、二重slot左右、T左右、V下線slot、V下線T左右で共通です。既存文字列の末尾から編集を開始し、<kbd>Enter</kbd>で確定、<kbd>Esc</kbd>で入力開始前へ戻し、<kbd>Backspace</kbd>で末尾1文字、<kbd>Delete</kbd>で全文字を削除します。</li>
       <li><kbd>s</kbd> → S、<kbd>s</kbd><kbd>'</kbd> → S'、<kbd>v</kbd> → V、<kbd>o</kbd> → O、<kbd>c</kbd> → C、<kbd>m</kbd> → M。</li>
       <li><kbd>con</kbd> → 接、<kbd>pre</kbd> → 前。</li>
       <li><kbd>a</kbd> → a、<kbd>ad</kbd> → ad、<kbd>ado</kbd> → 副詞的目的格、<kbd>ac</kbd> → aC、<kbd>aux</kbd> → aux、<kbd>nc</kbd> → nC。</li>
@@ -836,7 +856,6 @@
     <ul>
       <li><kbd>t</kbd>：現在の単語、または選択中のV下線をT化します。<kbd>t</kbd>はT化専用で、解除には使いません。</li>
       <li>Tは左slot・右slotの2位置を持ち、<kbd>h</kbd>/<kbd>l</kbd>でそれぞれ選択できます。</li>
-      <li><kbd>f</kbd>：T左slotを直接編集。<kbd>g</kbd>：T右slotを直接編集。文字入力後、<kbd>Enter</kbd>で確定、<kbd>Esc</kbd>で取消します。</li>
       <li><kbd>X</kbd>：単語TならTを削除します。V下線TならTだけを外して通常のV下線へ戻します。</li>
     </ul>
 
@@ -910,6 +929,8 @@
   let verbalEditingSide = null;
   let verbalEditingBuffer = '';
   let verbalEditingOriginal = '';
+  // / で現在のslotへ任意文字列を直接入力するモード。
+  let directEditing = null; // {ref, before, inputEl}
   let cursor = 0;
   let cursorSlot = null; // null | 'left' | 'right'
   let tokens = [];
@@ -923,6 +944,9 @@
   let verbals = [];
   let arrows = [];
   let arrowDraft = null; // {word, slot} : ad または a の働きの標識
+  // r ... Enter は複数キーで構成されるが、履歴上は1編集として扱う。
+  // r開始時点の文書状態だけを保持し、確定時に1件だけundoへ積む。
+  let arrowHistoryBefore = null;
 
   // gaps[i] は「単語 i-1 と i の間」。
   // 0 は文頭、tokens.length は文末。入れ子のため複数記号を保持できる。
@@ -1153,6 +1177,7 @@
     nextGroupId = state.nextGroupId || (groups.reduce((m,g) => Math.max(m, g.id || 0), 0) + 1);
     arrows = cloneData(state.arrows || []);
     arrowDraft = null;
+    arrowHistoryBefore = null;
 
     cursor = Math.max(0, Math.min(cursor, tokens.length));
     gapCursor = Math.max(0, Math.min(gapCursor, tokens.length));
@@ -1679,6 +1704,9 @@
       }else if(gapMode){
         modeBadge.textContent = 'BORDER';
         modeBadge.classList.add('pending');
+      }else if(directEditing){
+        modeBadge.textContent = 'DIRECT INPUT  /';
+        modeBadge.classList.add('pending');
       }else if(verbalEditingSide){
         modeBadge.textContent = `T-${verbalEditingSide === 'left' ? 'LEFT' : 'RIGHT'} INPUT`;
         modeBadge.classList.add('pending');
@@ -1785,6 +1813,7 @@
       if(dual?.enabled && dual.kind === 'double' && !verbal?.on){
         const dualEl = document.createElement('div');
         dualEl.className = 'dual-work';
+        dualEl.style.width = `${requiredDoubleWidth(i)}px`;
 
         const dleft = document.createElement('div');
         const leftPending = pendingKeys && pendingCursor === i && pendingSlot === 'left';
@@ -1850,6 +1879,7 @@
       if(verbal?.on){
         const verbalEl = document.createElement('div');
         verbalEl.className = 'verbal';
+        verbalEl.style.width = `${requiredTWidth({word:i,slot:'left'}, {word:i,slot:'right'})}px`;
 
         const left = document.createElement('div');
         const leftEditing = i === cursor && verbalEditingSide === 'left';
@@ -1989,6 +2019,9 @@
       modeBadge.classList.add('pending');
     }else if(gapMode){
       modeBadge.textContent = 'BORDER';
+      modeBadge.classList.add('pending');
+    }else if(directEditing){
+      modeBadge.textContent = 'DIRECT INPUT  /';
       modeBadge.classList.add('pending');
     }else if(verbalEditingSide){
       modeBadge.textContent = `T-${verbalEditingSide === 'left' ? 'LEFT' : 'RIGHT'} INPUT`;
@@ -2292,8 +2325,11 @@
       const last=anchor;
       const y=anchor.y;
       const centerX=(anchor.left+anchor.right)/2;
-      const width=Math.max(66,anchor.right-anchor.left);
       const gv=ensureGroupVerbal(g);
+      const groupTRequiredWidth = gv.on
+        ? requiredTWidth({group:g.id,slot:'left'}, {group:g.id,slot:'right'})
+        : 0;
+      const width=Math.max(82, anchor.right-anchor.left, groupTRequiredWidth);
 
       if(gv.on){
         const verbal=document.createElement('div');
@@ -2723,6 +2759,7 @@
     );
     if(arrowDraft && (!isValidDisplayRef(arrowDraft) || !['ad','a','副詞的目的格'].includes(getDisplayValue(arrowDraft)))){
       arrowDraft = null;
+      arrowHistoryBefore = null;
     }
   }
 
@@ -2732,6 +2769,11 @@
       modeBadge.textContent = 'ARROW: source must be a / ad / 副詞的目的格';
       modeBadge.classList.add('pending');
       return;
+    }
+    // 矢印選択中にrで始点を選び直す場合も、文書自体はまだ編集されていない。
+    // 最初にrを押した時点の状態をそのまま履歴境界として維持する。
+    if(!arrowDraft || !arrowHistoryBefore){
+      arrowHistoryBefore = captureMarkState();
     }
     arrowDraft = {...ref};
     render();
@@ -2747,16 +2789,23 @@
       return;
     }
 
+    const historyBefore = arrowHistoryBefore || captureMarkState();
+
     // 1つの修飾標識からは1本。既存があれば付け替える。
     arrows = arrows.filter(a => !sameDisplayRef(a.from, arrowDraft));
     arrows.push({from:{...arrowDraft}, to:{...to}});
     arrowDraft = null;
+    arrowHistoryBefore = null;
     render();
+
+    // r開始からEnter確定までを、履歴上は必ず1編集だけにする。
+    pushMarkUndo(historyBefore);
   }
 
   function cancelArrow(){
     if(!arrowDraft) return;
     arrowDraft = null;
+    arrowHistoryBefore = null;
     render();
   }
 
@@ -2766,6 +2815,56 @@
     arrows = arrows.filter(a => !sameDisplayRef(a.from, ref));
     if(sameDisplayRef(arrowDraft, ref)) arrowDraft = null;
     render();
+  }
+
+  // slot の必要幅は入力方法とは無関係に、常に現在の内容から決める。
+  // 空slotにも共通の最小幅を与え、内容が長ければ平常時からその分だけ広げる。
+  const SLOT_MIN_WIDTH = 28;
+  const SLOT_TEXT_PADDING_X = 12;
+  let slotMeasureCanvas = null;
+
+  function measureSlotTextWidth(text){
+    const value = String(text || '');
+    if(!value) return 0;
+    if(!slotMeasureCanvas) slotMeasureCanvas = document.createElement('canvas');
+    const ctx = slotMeasureCanvas.getContext('2d');
+    if(!ctx) return value.length * 8;
+    const sample = document.querySelector('.mark, .verbal-left, .group-mark');
+    const cs = sample ? getComputedStyle(sample) : null;
+    ctx.font = cs?.font || '700 14px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+    return Math.ceil(ctx.measureText(value).width);
+  }
+
+  function storedSlotText(ref){
+    if(!ref) return '';
+    if(ref.group != null){
+      const g = groupById(ref.group);
+      if(!g) return '';
+      const gv = ensureGroupVerbal(g);
+      if(gv?.on && (ref.slot === 'left' || ref.slot === 'right')) return tSlotText(gv, ref.slot);
+      return g.mark || '';
+    }
+    const v = verbals[ref.word];
+    if(v?.on && (ref.slot === 'left' || ref.slot === 'right')) return tSlotText(v, ref.slot);
+    const slot = ensureWorkSlot(ref.word);
+    if(slot?.kind === 'double' && (ref.slot === 'left' || ref.slot === 'right')) return slot[ref.slot] || '';
+    return slot?.text || '';
+  }
+
+  function requiredSlotWidth(ref){
+    return Math.max(SLOT_MIN_WIDTH, measureSlotTextWidth(storedSlotText(ref)) + SLOT_TEXT_PADDING_X);
+  }
+
+  function requiredTWidth(leftRef, rightRef){
+    // Tの中央棒は常に中央なので、左右slotは同じ幅。長い側に合わせて両側を確保する。
+    return Math.max(82, 2 * Math.max(requiredSlotWidth(leftRef), requiredSlotWidth(rightRef)) + 2);
+  }
+
+  function requiredDoubleWidth(word){
+    const left = requiredSlotWidth({word,slot:'left'});
+    const right = requiredSlotWidth({word,slot:'right'});
+    // 左右46% + 中央8%の既存配置を維持しつつ、どちらの内容も収まる幅にする。
+    return Math.max(88, Math.ceil(Math.max(left, right) / 0.46));
   }
 
   // slot横幅を決める唯一のロジック。描画側は個別に width/left/right を決めない。
@@ -2782,7 +2881,7 @@
           ? {width:'calc(50% - 1px)', left:'0', right:'auto'}
           : {width:'calc(50% - 1px)', left:'calc(50% + 1px)', right:'auto'};
       }
-      return {width:`${Math.max(24, availableWidth ?? 24)}px`, left:null, right:null};
+      return {width:`${Math.max(requiredSlotWidth(ref), availableWidth ?? 0)}px`, left:null, right:null};
     }
 
     const v = verbals[ref.word];
@@ -2800,7 +2899,7 @@
         : {width:'46%', left:'54%', right:'auto'};
     }
 
-    return {width:'100%', left:null, right:null};
+    return {width:'100%', minWidth:`${requiredSlotWidth(ref)}px`, left:null, right:null};
   }
 
   function applySlotGeometry(el, ref, availableWidth = null){
@@ -2808,6 +2907,7 @@
     const geometry = slotGeometry(ref, availableWidth);
     if(!geometry) return;
     el.style.width = geometry.width;
+    if(geometry.minWidth != null) el.style.minWidth = geometry.minWidth; else el.style.removeProperty('min-width');
     if(geometry.left != null) el.style.left = geometry.left; else el.style.removeProperty('left');
     if(geometry.right != null) el.style.right = geometry.right; else el.style.removeProperty('right');
   }
@@ -2889,17 +2989,17 @@
     arrowLayer.appendChild(p);
   }
 
-  function drawOneArrow(from, to, preview=false){
+  function makeArrowLayout(from, to){
     const fromEl = getDisplayElement(from);
     const toEl = getDisplayElement(to);
-    if(!fromEl || !toEl) return;
+    if(!fromEl || !toEl) return null;
 
     const a = rectInWorkspace(fromEl);
     const b = rectInWorkspace(toEl);
     const rows = getRows();
     const ra = rowIndexForWord(rows, refWord(from));
     const rb = rowIndexForWord(rows, refWord(to));
-    if(ra < 0 || rb < 0) return;
+    if(ra < 0 || rb < 0) return null;
 
     const order = flattenedDisplayOrder();
     const ia = order.findIndex(x => sameDisplayRef(x, from));
@@ -2909,30 +3009,168 @@
     const sentenceRect = rectInWorkspace(sentence);
     const leftEdge = sentenceRect.left + 2;
     const rightEdge = sentenceRect.right - 2;
-    // 矢印を標識から少し下へ降ろしてから横へ曲げる共通距離。
-    const gap = 16;
+    const exitEdge = forward ? rightEdge : leftEdge;
+    const enterEdge = forward ? leftEdge : rightEdge;
+    const sameRow = ra === rb;
+    const spanX = Math.abs(b.cx - a.cx);
+    const spanRows = Math.abs(rb - ra);
+    const rankSpan = spanRows * 100000 + spanX;
+    const horizontals = [];
 
-    if(ra === rb){
-      const laneY = Math.max(a.bottom, b.bottom) + gap;
+    if(sameRow){
+      horizontals.push({row:ra, x1:Math.min(a.cx, b.cx), x2:Math.max(a.cx, b.cx)});
+    }else{
+      horizontals.push({row:ra, x1:Math.min(a.cx, exitEdge), x2:Math.max(a.cx, exitEdge)});
+      const step = rb > ra ? 1 : -1;
+      for(let r = ra + step; r !== rb; r += step){
+        horizontals.push({row:r, x1:Math.min(leftEdge, rightEdge), x2:Math.max(leftEdge, rightEdge)});
+      }
+      horizontals.push({row:rb, x1:Math.min(enterEdge, b.cx), x2:Math.max(enterEdge, b.cx)});
+    }
+
+    return {
+      from, to, fromEl, toEl, a, b, rows, ra, rb, ia, ib, forward,
+      leftEdge, rightEdge, exitEdge, enterEdge, sameRow,
+      spanX, spanRows, rankSpan, horizontals,
+      ax:a.cx, bx:b.cx, fromSide:null, toSide:null
+    };
+  }
+
+  function horizontalSegmentsOverlap(a, b){
+    return !(a.x2 < b.x1 || b.x2 < a.x1);
+  }
+
+  function arrowLayoutsConflict(layoutA, layoutB){
+    return layoutA.horizontals.some(segA =>
+      layoutB.horizontals.some(segB => segA.row === segB.row && horizontalSegmentsOverlap(segA, segB))
+    );
+  }
+
+  function assignArrowLevels(layouts){
+    const sorted = layouts.slice().sort((a,b) =>
+      a.rankSpan - b.rankSpan || a.ra - b.ra || a.ia - b.ia
+    );
+    const placed = [];
+    for(const layout of sorted){
+      let level = 0;
+      while(placed.some(other => other.level === level && arrowLayoutsConflict(layout, other))) level++;
+      layout.level = level;
+      placed.push(layout);
+    }
+  }
+
+  function endpointPreferredSide(layout, which){
+    if(which === 'from'){
+      const targetX = layout.sameRow ? layout.b.cx : layout.exitEdge;
+      return targetX < layout.a.cx ? 'left' : 'right';
+    }
+    const sourceX = layout.sameRow ? layout.a.cx : layout.enterEdge;
+    return sourceX < layout.b.cx ? 'left' : 'right';
+  }
+
+  function makeSymmetricOffsets(rect, count){
+    if(count <= 0) return [];
+    if(count === 1) return [0];
+    const margin = 4;
+    const maxAbs = Math.max(0, Math.min(rect.cx - (rect.left + margin), (rect.right - margin) - rect.cx));
+    const step = Math.max(4, Math.min(10, (maxAbs * 2) / Math.max(1, count - 1)));
+    const center = (count - 1) / 2;
+    return Array.from({length:count}, (_, i) => (i - center) * step);
+  }
+
+  function sortEndpointPriority(a, b){
+    return (a.layout.level || 0) - (b.layout.level || 0)
+      || a.layout.rankSpan - b.layout.rankSpan
+      || a.layout.ia - b.layout.ia;
+  }
+
+  function assignOffsetToEndpoint(item, offset, cx){
+    const x = cx + offset;
+    if(item.which === 'from') item.layout.ax = x;
+    else item.layout.bx = x;
+  }
+
+  function assignEndpointOffsets(layouts){
+    const endpointMap = new Map();
+
+    function addEndpoint(layout, ref, which, rect){
+      const preferredSide = endpointPreferredSide(layout, which);
+      if(which === 'from') layout.fromSide = preferredSide;
+      else layout.toSide = preferredSide;
+      const key = displayKey(ref);
+      if(!endpointMap.has(key)) endpointMap.set(key, {rect, items:[]});
+      endpointMap.get(key).items.push({layout, which, preferredSide});
+    }
+
+    for(const layout of layouts){
+      addEndpoint(layout, layout.from, 'from', layout.a);
+      addEndpoint(layout, layout.to, 'to', layout.b);
+    }
+
+    for(const entry of endpointMap.values()){
+      const {rect, items} = entry;
+      if(!items.length) continue;
+      const offsets = makeSymmetricOffsets(rect, items.length);
+      const negatives = offsets.filter(x => x < 0).sort((a,b) => Math.abs(a) - Math.abs(b));
+      const positives = offsets.filter(x => x > 0).sort((a,b) => Math.abs(a) - Math.abs(b));
+      const centers = offsets.filter(x => x === 0);
+
+      const leftItems = items.filter(x => x.preferredSide === 'left').sort(sortEndpointPriority);
+      const rightItems = items.filter(x => x.preferredSide === 'right').sort(sortEndpointPriority);
+      const unassigned = [];
+
+      while(leftItems.length && negatives.length){
+        assignOffsetToEndpoint(leftItems.shift(), negatives.shift(), rect.cx);
+      }
+      while(rightItems.length && positives.length){
+        assignOffsetToEndpoint(rightItems.shift(), positives.shift(), rect.cx);
+      }
+
+      if(centers.length){
+        const sideWithMoreRemaining = leftItems.length >= rightItems.length ? leftItems : rightItems;
+        const otherSide = sideWithMoreRemaining === leftItems ? rightItems : leftItems;
+        const target = sideWithMoreRemaining.length ? sideWithMoreRemaining.shift() : (otherSide.length ? otherSide.shift() : null);
+        if(target) assignOffsetToEndpoint(target, centers.shift(), rect.cx);
+      }
+
+      unassigned.push(...leftItems, ...rightItems);
+      unassigned.sort(sortEndpointPriority);
+
+      const remainingOffsets = [...negatives, ...centers, ...positives].sort((a,b) => Math.abs(a) - Math.abs(b) || a - b);
+      while(unassigned.length && remainingOffsets.length){
+        assignOffsetToEndpoint(unassigned.shift(), remainingOffsets.shift(), rect.cx);
+      }
+    }
+  }
+
+  function drawArrowLayout(layout, preview=false){
+    if(!layout) return;
+    const {rows, ra, rb, exitEdge, enterEdge, sameRow} = layout;
+    const aBottom = layout.a.bottom + 1;
+    const bBottom = layout.b.bottom + 1;
+    const ax = layout.ax ?? layout.a.cx;
+    const bx = layout.bx ?? layout.b.cx;
+    const baseGap = 16;
+    const laneStep = 12;
+    const gap = baseGap + (layout.level || 0) * laneStep;
+
+    if(sameRow){
+      const laneY = Math.max(layout.a.bottom, layout.b.bottom) + gap;
       createSvgPath(
-        `M ${a.cx} ${a.bottom + 1} L ${a.cx} ${laneY} L ${b.cx} ${laneY} L ${b.cx} ${b.bottom + 1}`,
+        `M ${ax} ${aBottom} L ${ax} ${laneY} L ${bx} ${laneY} L ${bx} ${bBottom}`,
         {preview, arrowHead:true}
       );
       return;
     }
 
     const step = rb > ra ? 1 : -1;
-    const exitEdge = forward ? rightEdge : leftEdge;
-    const enterEdge = forward ? leftEdge : rightEdge;
 
-    // 始点行: 修飾標識の下からその行の端まで。
     const firstLane = rows[ra].bottom + gap;
     createSvgPath(
-      `M ${a.cx} ${a.bottom + 1} L ${a.cx} ${firstLane} L ${exitEdge} ${firstLane}`,
+      `M ${ax} ${aBottom} L ${ax} ${firstLane} L ${exitEdge} ${firstLane}`,
       {preview, arrowHead:false}
     );
 
-    // 中間行: 逆側の端から生えて、その行の反対端まで伸ばす。
     for(let r = ra + step; r !== rb; r += step){
       const lane = rows[r].bottom + gap;
       createSvgPath(
@@ -2941,10 +3179,9 @@
       );
     }
 
-    // 終点行: 逆端から生えて、終点の下へ入り、最後に終点へ向かう。
     const lastLane = rows[rb].bottom + gap;
     createSvgPath(
-      `M ${enterEdge} ${lastLane} L ${b.cx} ${lastLane} L ${b.cx} ${b.bottom + 1}`,
+      `M ${enterEdge} ${lastLane} L ${bx} ${lastLane} L ${bx} ${bBottom}`,
       {preview, arrowHead:true}
     );
   }
@@ -2982,16 +3219,28 @@
     defs.append(marker, previewMarker);
     arrowLayer.appendChild(defs);
 
-    for(const arrow of arrows) drawOneArrow(arrow.from, arrow.to, false);
+    const layouts = arrows.map(arrow => makeArrowLayout(arrow.from, arrow.to)).filter(Boolean);
+    assignArrowLevels(layouts);
 
+    let previewLayout = null;
     if(arrowDraft){
       const to = currentDisplayRef();
       if(to && !sameDisplayRef(arrowDraft, to) && sameSentenceRefs(arrowDraft, to)){
-        drawOneArrow(arrowDraft, to, true);
+        previewLayout = makeArrowLayout(arrowDraft, to);
+        if(previewLayout){
+          let level = 0;
+          while(layouts.some(other => other.level === level && arrowLayoutsConflict(previewLayout, other))) level++;
+          previewLayout.level = level;
+        }
       }
     }
-  }
 
+    const visibleLayouts = previewLayout ? [...layouts, previewLayout] : layouts.slice();
+    assignEndpointOffsets(visibleLayouts);
+
+    for(const layout of layouts) drawArrowLayout(layout, false);
+    if(previewLayout) drawArrowLayout(previewLayout, true);
+  }
   function setMode(nextMode){
     mode = nextMode;
     pendingKeys = '';
@@ -3003,6 +3252,7 @@
     verbalEditingSide = null;
     verbalEditingBuffer = '';
     verbalEditingOriginal = '';
+    directEditing = null;
     modeBadge.textContent = mode;
     modeBadge.classList.remove('pending');
 
@@ -3312,6 +3562,195 @@
       render();
       return true;
     }
+    return true;
+  }
+
+  function directRefText(ref){
+    if(!ref) return '';
+    if(ref.group != null){
+      const g = groupById(ref.group);
+      if(!g) return '';
+      const gv = ensureGroupVerbal(g);
+      if(gv?.on && (ref.slot === 'left' || ref.slot === 'right')) return tSlotText(gv, ref.slot);
+      return g.mark || '';
+    }
+    if(ref.word == null || ref.word < 0 || ref.word >= tokens.length) return '';
+    const v = ensureVerbal(ref.word);
+    if(v?.on && (ref.slot === 'left' || ref.slot === 'right')) return tSlotText(v, ref.slot);
+    const slot = ensureWorkSlot(ref.word);
+    if(!slot?.enabled) return '';
+    if(slot.kind === 'double' && (ref.slot === 'left' || ref.slot === 'right')) return slot[ref.slot] || '';
+    return slot.text || '';
+  }
+
+  function setDirectRefText(ref, text){
+    if(!ref) return false;
+    if(ref.group != null){
+      const g = groupById(ref.group);
+      if(!g) return false;
+      const gv = ensureGroupVerbal(g);
+      if(gv?.on && (ref.slot === 'left' || ref.slot === 'right')){
+        const slot = tSlot(gv, ref.slot);
+        if(!slot?.enabled) return false;
+        setTSlotText(gv, ref.slot, text);
+      }else{
+        g.mark = text;
+        groupCursorTarget = 'single';
+      }
+      return true;
+    }
+    if(ref.word == null || ref.word < 0 || ref.word >= tokens.length) return false;
+    if(wordDisplayDisabledByGroupT(ref.word)) return false;
+    const v = ensureVerbal(ref.word);
+    if(v?.on){
+      if(ref.slot !== 'left' && ref.slot !== 'right') return false;
+      const slot = tSlot(v, ref.slot);
+      if(!slot?.enabled) return false;
+      setTSlotText(v, ref.slot, text);
+      return true;
+    }
+    const slot = ensureWorkSlot(ref.word);
+    if(!slot?.enabled) return false;
+    if(slot.kind === 'double'){
+      if(ref.slot !== 'left' && ref.slot !== 'right') return false;
+      slot[ref.slot] = text;
+    }else{
+      slot.text = text;
+    }
+    return true;
+  }
+
+  function removeDirectInputElement(){
+    const el = directEditing?.inputEl;
+    if(el?.isConnected) el.remove();
+    document.querySelectorAll('.direct-slot-input').forEach(x => x.remove());
+    if(directEditing) directEditing.inputEl = null;
+  }
+
+  // / 直接入力の input はslot自体の既存寸法に合わせる。
+  // カーソルを当てた瞬間にslotが膨らんで見えないよう、編集開始による幅変更はしない。
+  // slot側は平常時から共通の最小幅を持つ。
+  function resizeDirectInputElement(editor, target){
+    if(!editor || !target) return;
+    const r = rectInWorkspace(target);
+    editor.style.left = `${r.left}px`;
+    editor.style.top = `${r.top}px`;
+    editor.style.width = `${Math.max(1, r.width)}px`;
+    editor.style.height = `${Math.max(1, r.height)}px`;
+  }
+
+  function mountDirectInput(){
+    if(!directEditing) return;
+    removeDirectInputElement();
+
+    const target = getDisplayElement(directEditing.ref);
+    if(!target){
+      cancelDirectInput();
+      return;
+    }
+    const r = rectInWorkspace(target);
+    const editor = document.createElement('input');
+    editor.type = 'text';
+    editor.className = 'direct-slot-input';
+    editor.autocomplete = 'off';
+    editor.autocapitalize = 'off';
+    editor.spellcheck = false;
+    editor.value = directRefText(directEditing.ref);
+    editor.style.left = `${r.left}px`;
+    editor.style.top = `${r.top}px`;
+    editor.style.width = `${Math.max(1, r.width)}px`;
+    editor.style.height = `${Math.max(1, r.height)}px`;
+
+    editor.addEventListener('keydown', (e) => {
+      // input内の通常キーはworkspaceへ伝播させない。
+      // preventDefaultはしないため、a-z/A-Zを含む通常の文字入力はそのままinputへ入る。
+      if(e.isComposing || e.keyCode === 229){
+        e.stopPropagation();
+        return;
+      }
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        e.stopPropagation();
+        commitDirectInput();
+        return;
+      }
+      if(e.key === 'Escape'){
+        e.preventDefault();
+        e.stopPropagation();
+        cancelDirectInput();
+        return;
+      }
+      e.stopPropagation();
+    });
+    editor.addEventListener('keyup', e => e.stopPropagation());
+    editor.addEventListener('input', () => resizeDirectInputElement(editor, target));
+    editor.addEventListener('compositionupdate', () => {
+      requestAnimationFrame(() => resizeDirectInputElement(editor, target));
+    });
+    editor.addEventListener('compositionend', () => {
+      requestAnimationFrame(() => resizeDirectInputElement(editor, target));
+    });
+
+    workspace.appendChild(editor);
+    directEditing.inputEl = editor;
+    resizeDirectInputElement(editor, target);
+    editor.focus({preventScroll:true});
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+  }
+
+  function beginDirectInput(){
+    if(directEditing || tokens.length === 0) return false;
+    let ref = currentDisplayRef();
+    if(!ref) return false;
+    if(ref.group != null){
+      const g = groupById(ref.group);
+      if(!g) return false;
+      const gv = ensureGroupVerbal(g);
+      if(!gv.on){
+        ref = {group:g.id, slot:null};
+        setGroupCursor(g.id, 'single');
+      }
+    }
+    directEditing = {ref:cloneRef(ref), before:captureMarkState(), inputEl:null};
+    pendingKeys = '';
+    pendingCursor = null;
+    pendingSlot = null;
+    pendingGroupId = null;
+    pendingGroupSlot = null;
+    numericPending = false;
+    render();
+    // groupLayerはrender内のrequestAnimationFrameで描画されるため、その後にinputを重ねる。
+    requestAnimationFrame(() => mountDirectInput());
+    return true;
+  }
+
+  function commitDirectInput(){
+    if(!directEditing) return;
+    const editing = directEditing;
+    const before = editing.before;
+    const value = editing.inputEl?.value ?? directRefText(editing.ref);
+    setDirectRefText(editing.ref, value);
+    removeDirectInputElement();
+    directEditing = null;
+    cleanupArrows();
+    render();
+    pushMarkUndo(before);
+    workspace.focus();
+  }
+
+  function cancelDirectInput(){
+    if(!directEditing) return;
+    removeDirectInputElement();
+    directEditing = null;
+    render();
+    workspace.focus();
+  }
+
+  function handleDirectInputKey(e){
+    // direct input中は実際の<input>がフォーカスを持つ。
+    // 何らかの理由でworkspaceまで届いたキーだけVimコマンドから遮断する。
+    if(!directEditing) return false;
+    e.preventDefault();
     return true;
   }
 
@@ -3720,7 +4159,9 @@
   // 個々の編集関数が履歴登録を忘れても取りこぼさないよう、
   // NORMALモードのキー操作を文書状態の差分として自動記録する。
   workspace.addEventListener('keydown', (e) => {
-    if(mode !== 'NORMAL' || historyRestoring) return;
+    // rによる矢印編集は beginArrow/commitArrow で明示的に1履歴へまとめる。
+    // 矢印終点選択中の移動やEnterを通常の自動履歴へ混ぜない。
+    if(mode !== 'NORMAL' || historyRestoring || directEditing || arrowDraft) return;
     const isUndo = e.key === 'u' && !pendingKeys && !e.ctrlKey && !e.metaKey && !e.altKey;
     const isRedo = (e.key === 'r' || e.key === 'R') && e.ctrlKey && !e.metaKey && !e.altKey;
     if(isUndo || isRedo) return;
@@ -4044,6 +4485,12 @@
   workspace.addEventListener('keydown', (e) => {
     if(mode !== 'NORMAL') return;
 
+    // / の直接入力中は、通常コマンドを一切解釈せず文字列として受け取る。
+    if(directEditing){
+      handleDirectInputKey(e);
+      return;
+    }
+
     // Vim準拠: u = undo, Ctrl-r = redo
     // pending中の a→u→x では u を aux の入力文字として使う。
     if(e.key === 'u' && !pendingKeys && !e.ctrlKey && !e.metaKey && !e.altKey){
@@ -4184,10 +4631,13 @@
         return;
       }
       // rをもう一度押した場合は始点を選び直す。
+      // 履歴境界は最初のr時点のまま維持する。
       if(key === 'r'){
         e.preventDefault();
-        cancelArrow();
+        const historyBefore = arrowHistoryBefore;
+        arrowDraft = null;
         beginArrow();
+        if(historyBefore) arrowHistoryBefore = historyBefore;
         return;
       }
       e.preventDefault();
@@ -4237,8 +4687,7 @@
       else if(key === 'R') deleteArrowFromCurrent();
       else if(key === 'd') toggleDual();
       else if(key === 't') toggleVerbal();
-      else if(key === 'f') setVerbalSide('left');
-      else if(key === 'g') setVerbalSide('right');
+      else if(key === '/') beginDirectInput();
       else if(key === 'i') setMode('INSERT');
     }else if(key === 'h'){
       e.preventDefault();
@@ -4289,18 +4738,15 @@
     }else if(key === 't'){
       e.preventDefault();
       toggleVerbal();
-    }else if(key === 'f'){
-      e.preventDefault();
-      setVerbalSide('left');
-    }else if(key === 'g'){
-      e.preventDefault();
-      setVerbalSide('right');
     }else if(key === 'X'){
       e.preventDefault();
       clearVerbal();
     }else if(key === 'x'){
       e.preventDefault();
       setMark('');
+    }else if(key === '/'){
+      e.preventDefault();
+      beginDirectInput();
     }else if(key === 'i'){
       e.preventDefault();
       setMode('INSERT');
@@ -4318,16 +4764,6 @@
   document.getElementById('verbalToggle').addEventListener('click', () => {
     setMode('NORMAL');
     toggleVerbal();
-  });
-
-  document.getElementById('verbalLeft').addEventListener('click', () => {
-    setMode('NORMAL');
-    setVerbalSide('left');
-  });
-
-  document.getElementById('verbalRight').addEventListener('click', () => {
-    setMode('NORMAL');
-    setVerbalSide('right');
   });
 
   document.getElementById('clearMark').addEventListener('click', () => {
