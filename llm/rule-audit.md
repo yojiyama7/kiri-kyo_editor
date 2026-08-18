@@ -4,17 +4,17 @@
 
 ## 監査方法
 
-- active規則集合を A とし、|A| = 156。
-- A x A の全順序対 24336 件を検査した。
+- active規則集合を A とし、|A| = 159。
+- A x A の全順序対 25281 件を検査した。
 - 判断名が異なるペアは独立、同じ判断名でも適用条件が排他的なら両立とする。
 - 同じ判断名で条件が同時成立し、結果が異なるペアだけを矛盾とする。
 - 全順序対の判定は `llm/rule-pair-audit.csv` に保存する。
 
 ## 結果
 
-- self: 156
-- orthogonal: 24114
-- compatible: 66
+- self: 159
+- orthogonal: 25054
+- compatible: 68
 - unresolved conflict: 0
 
 ## 廃止した旧規則
@@ -98,15 +98,20 @@
 
 ### boundary-slot
 
-- BD-01: [と<は境界文字列内の出現位置ごとにsingle slotを1つ持つ。
-- BD-02: NORMALで[または<を作成した直後とクリック時は、その境界slotを選択する。
+- BD-01: [は境界文字列内の出現位置ごとにsingle slotを1つ持つ。
+- BD-02: NORMALで[を作成した直後とクリック時は、その境界slotを選択する。
 - BD-03: [の境界slotには通常の標識キー列で働きの標識を入力できる。
-- BD-04: 境界slotは文ローカル境界indexと境界文字列内indexでinner_jsonへ保存する。
-- BD-05: 境界slotのh/lは表示順で隣接する境界slot、疑似token、通常tokenへ移動する。
+- BD-04: [の境界slotは文ローカル境界indexと境界文字列内indexでinner_jsonへ保存する。
+- BD-05: [の境界slotのh/lは表示順で隣接する境界slot、疑似token、通常tokenへ移動する。
+
+### boundary-symbol
+
+- BD-06: <はslotを持たない。
+- BD-07: BORDERのrは現在境界で最後の<自体を始点に矢印選択へ移る。
 
 ### arrow
 
-- AR-01: 矢印始点は<の境界slot、またはa、ad、副詞的目的格、同格の有効slotに限る。
+- AR-01: 矢印始点はBORDERで指定したslotなしの<、またはa、ad、副詞的目的格、同格の有効slotに限る。
 - AR-02: rで現在slotを始点に矢印作成を開始する。
 - AR-03: 矢印選択中のEnterで終点を確定する。
 - AR-04: 終点には通常token、疑似token、groupの有効slotを指定できる。
@@ -132,7 +137,7 @@
 - MV-06: 隣group内部が完全に空なら外からはgroup自身へ入る。
 - MV-07: 同じ高さの実token候補がなく、明示的な非T子group参照を選ぶ場合は空でもsingle group slotを選ぶ。
 - MV-08: 同じ高さの実token候補がない場合だけ、親groupの直接兄弟memberを方向側の内側葉より優先する。
-- MV-09: 上記候補がない場合、同じ下線の方向側葉slotを空でも優先する。
+- MV-09: 上記候補がない場合、同じ連続下線区間の方向側葉slotを空でも優先する。
 - MV-10: 最上位group同士を文の暗黙rootの兄弟としてh/l移動対象にする。
 - MV-11: double/T内部の左右移動を隣接疑似tokenより優先する。
 - MV-12: double/T外側slotから進んだとき疑似tokenへ出る。
@@ -147,6 +152,7 @@
 - MV-21: 0は疑似tokenを含む現在行最初のsurfaceへ移る。
 - MV-22: $は疑似tokenを含む現在行最後のsurfaceへ移る。
 - MV-23: h/lで行境界を跨ぐとき、境界側tokenに実表示slotがあれば内包groupのslotよりtoken slotを優先する。
+- MV-24: 非連続下線の区間内側端からh/lすると、別区間へ飛ばず隣接する未所属gap slotへ空でも移動する。
 
 ### V-selection
 
@@ -205,7 +211,7 @@
 - KB-12: Ctrl-rでredoする。
 - KB-13: カーソル移動だけの操作を履歴へ入れない。
 - KB-15: NORMALの閉じ境界記号キーを現在単語の右境界へ追加する。
-- KB-14: 定義済みキー列を対応する標識文字列へ変換し、apは同格とする。
+- KB-14: 定義済みキー列を対応する標識文字列へ変換し、apは同格、eadは誘導adとする。
 
 ### save
 

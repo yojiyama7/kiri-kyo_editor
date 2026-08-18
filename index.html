@@ -1919,7 +1919,8 @@
           const boundary=boundaryAtRef(ref);
           if(!boundary?.slot){
             const symbolEl=document.createElement('span');
-            symbolEl.className='boundary-symbol-character';
+            symbolEl.className='boundary-symbol-character'
+              + (sameDisplayRef(arrowDraft,ref) ? ' arrow-source' : '');
             symbolEl.textContent=symbol;
             symbolEl.dataset.boundarySymbolGap=String(index);
             symbolEl.dataset.boundaryIndex=String(boundaryIndex);
@@ -3085,7 +3086,7 @@
   }
 
   function currentDisplayRef(){
-    if(boundaryCursor != null && boundaryAtRef(boundaryCursor)) return cloneRef(boundaryCursor);
+    if(boundaryCursor != null && boundaryAtRef(boundaryCursor)?.slot) return cloneRef(boundaryCursor);
     if(gapTokenCursor != null && pseudoAtRef(gapTokenCursor)) return cloneRef(gapTokenCursor);
     if(tokens.length === 0 || cursor >= tokens.length) return null;
     if(groupCursorId !== null){
@@ -3161,7 +3162,10 @@
 
   function isValidDisplayRef(ref){
     if(!ref) return false;
-    if(ref.boundary != null) return Boolean(boundaryAtRef(ref)?.slot?.enabled);
+    if(ref.boundary != null){
+      const boundary=boundaryAtRef(ref);
+      return boundary?.symbol === '<' || Boolean(boundary?.slot?.enabled);
+    }
     if(ref.gapToken != null) return Boolean(pseudoAtRef(ref)?.slot?.enabled);
     if(ref.group != null){
       const g = groupById(ref.group);
@@ -3184,8 +3188,8 @@
     writeEditorState(Core.cleanupArrows(readEditorState()));
   }
 
-  function beginArrow(){
-    const ref = currentDisplayRef();
+  function beginArrow(sourceRef=null){
+    const ref = sourceRef || currentDisplayRef();
     if(!ref || !Core.isArrowSourceRef(readEditorState(),ref)){
       modeBadge.textContent = 'ARROW: source must be < / a / ad / 副詞的目的格 / 同格';
       modeBadge.classList.add('pending');
@@ -3198,6 +3202,22 @@
     }
     arrowDraft = {...ref};
     render();
+  }
+
+  function beginArrowFromCurrentBoundary(){
+    const position=currentBorderPosition();
+    const symbols=gaps[position.gap] || '';
+    const boundaryIndex=symbols.lastIndexOf('<');
+    if(boundaryIndex < 0){
+      modeBadge.textContent='ARROW: current border has no <';
+      modeBadge.classList.add('pending');
+      return false;
+    }
+    gapMode=false;
+    gapTokenCursor=null;
+    boundaryCursor=null;
+    beginArrow(boundaryRef(position.gap,boundaryIndex));
+    return true;
   }
 
   function commitArrow(){
@@ -3326,7 +3346,9 @@
   function getDisplayElement(ref){
     if(!ref) return null;
     if(ref.boundary != null){
-      return sentence.querySelector(`[data-boundary-work="${ref.boundary}"][data-boundary-index="${Number(ref.boundaryIndex || 0)}"]`);
+      const index=Number(ref.boundaryIndex || 0);
+      return sentence.querySelector(`[data-boundary-work="${ref.boundary}"][data-boundary-index="${index}"]`)
+        || sentence.querySelector(`[data-boundary-symbol-gap="${ref.boundary}"][data-boundary-index="${index}"]`);
     }
     if(ref.gapToken != null){
       const index=Number(ref.gapTokenIndex || 0);
@@ -3381,6 +3403,10 @@
   }
 
   function rowIndexForDisplayRef(rows,ref,element){
+    if(ref?.boundary != null && !boundaryAtRef(ref)?.slot){
+      const anchor=Math.max(0,Math.min(tokens.length-1,ref.boundary));
+      return rowIndexForWord(rows,anchor);
+    }
     if(ref?.boundary == null && ref?.gapToken == null) return rowIndexForWord(rows,refWord(ref));
     const wordElement=element?.closest('.word, .boundary-slot-item') || element;
     if(!wordElement) return -1;
@@ -4394,6 +4420,23 @@
     return Math.abs(currentTop-wordTop) < 5 ? wordTarget : null;
   }
 
+  function nonContiguousGapExitTarget(currentRef,index,preferred){
+    if(!currentRef || index < 0 || index >= tokens.length) return null;
+    const paired=Boolean(verbals[index]?.on || slotIsDouble(index));
+    const slot=paired ? (preferred === 'right' ? 'right' : 'left') : null;
+    const adjacentRef={word:index,slot};
+    const exitsSegment=groupsContainingRef(currentRef).some(group =>
+      groupSegments(group).length > 1
+      && !groupSegments(group).some(segment => refInsideSegment(adjacentRef,segment))
+    );
+    if(!exitsSegment || !isValidDisplayRef(adjacentRef)) return null;
+    const currentEl=getDisplayElement(currentRef);
+    const adjacentEl=getDisplayElement(adjacentRef);
+    if(!currentEl || !adjacentEl || getComputedStyle(adjacentEl).visibility === 'hidden') return null;
+    if(Math.abs(rectInWorkspace(currentEl).top-rectInWorkspace(adjacentEl).top) >= 5) return null;
+    return {kind:'word',word:index,slot,paired};
+  }
+
   function horizontalNeighborTarget(index, side, currentRef=null){
     if(index < 0 || index > tokens.length) return null;
     if(index === tokens.length) return horizontalEntryTarget(index, null);
@@ -4498,6 +4541,8 @@
       }
       if(!movingInsidePair && adjacent?.kind === 'token'){
         const preferred=direction === 'left' ? lastSlotOf(adjacent.index) : firstSlotOf(adjacent.index);
+        const gapExit=nonContiguousGapExitTarget(currentRef,adjacent.index,preferred);
+        if(gapExit) return gapExit;
         const crossesSentence=sentenceOfRef(currentRef) !== sentenceOfRef({word:adjacent.index,slot:preferred});
         if(crossesSentence){
           const visibleBoundarySlot=visibleWordTarget(adjacent.index,preferred);
@@ -5082,7 +5127,7 @@
     // a はまず「形容詞」として薄く表示する。
     // 続けて d が来たら ad、c が来たら aC、u x が来たら aux に分岐する。
     if(!pendingKeys){
-      if(['s','a','n','c','p'].includes(key)){
+      if(['s','a','n','c','p','e'].includes(key)){
         beginPendingMark(key);
         return true;
       }
@@ -5111,6 +5156,25 @@
       }
       assignPendingMark('S');
       handleMarkSequence('a');
+      return handleMarkSequence(key);
+    }
+
+    if(pendingKeys === 'e'){
+      if(key === 'a'){
+        pendingKeys='ea';
+        render();
+        return true;
+      }
+      cancelPending();
+      return handleMarkSequence(key);
+    }
+
+    if(pendingKeys === 'ea'){
+      if(key === 'd' || key === 'D'){
+        assignPendingMark('誘導ad');
+        return true;
+      }
+      cancelPending();
       return handleMarkSequence(key);
     }
 
@@ -5250,6 +5314,11 @@
     const key = e.key;
 
     if(gapMode){
+      if(key === 'r'){
+        e.preventDefault();
+        beginArrowFromCurrentBoundary();
+        return;
+      }
       if(key === '/'){
         e.preventDefault();
         beginGapTokenInput();
@@ -5464,7 +5533,10 @@
     }else if(key === '$'){
       e.preventDefault();
       moveToCurrentLineEdge('end');
-    }else if(['s','v','o','c','m','a','n','p','+'].includes(key)){
+    }else if(key === 'e' && gapTokenCursor != null){
+      e.preventDefault();
+      beginPseudoTokenLabelInput();
+    }else if(['s','v','o','c','m','a','n','p','e','+'].includes(key)){
       e.preventDefault();
       handleMarkSequence(key);
     }else if(['1','2','3','4','5'].includes(key)){
@@ -5504,9 +5576,6 @@
     }else if(key === '/'){
       e.preventDefault();
       beginDirectInput();
-    }else if(key === 'e' && gapTokenCursor != null){
-      e.preventDefault();
-      beginPseudoTokenLabelInput();
     }else if(key === 'i'){
       e.preventDefault();
       setMode('INSERT');
@@ -5535,7 +5604,9 @@
     workSlots = workSlots.map(() => makeWorkSlot());
     verbals = verbals.map(() => (makeTState(false)));
     gaps = gaps.map(() => '');
+    boundarySlots = boundarySlots.map(() => []);
     gapTokens = gapTokens.map(() => []);
+    boundaryCursor = null;
     gapTokenCursor = null;
     groups = [];
     groupSelection = null;

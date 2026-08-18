@@ -1114,21 +1114,44 @@ test('fixed orange cursors keep a visible border on every selectable slot shape'
   }
 });
 
-test('h and l stay on the same underline when it has another leaf in that direction', async ({ page }) => {
+test('h and l stay inside one contiguous underline segment', async ({ page }) => {
   const inner={version:1,text:'a b c',sentences:[{
     tokens:[0,1,2].map(() => ({slot:{kind:'single',text:''}})),
     structures:[
-      {id:1,kind:'group',members:[{token:0,port:'single'},{token:2,port:'single'}],form:'underline',mark:''}
+      {id:1,kind:'group',members:[{token:0,port:'single'},{token:1,port:'single'},{token:2,port:'single'}],form:'underline',mark:''}
     ]
   }]};
   await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
   await page.waitForTimeout(50);
   await typeKeys(page,['j','k','l']);
   let cursor=await currentCursor(page);
-  assert.equal(cursor.word,2);
+  assert.equal(cursor.word,1);
   await press(page,'h');
   cursor=await currentCursor(page);
   assert.equal(cursor.word,0);
+});
+
+test('h and l leave a non-contiguous underline through its unselected gap', async ({ page }) => {
+  const inner={version:1,text:'Why is she taking',sentences:[{
+    tokens:Array.from({length:4},() => ({slot:{kind:'single',text:''}})),
+    structures:[{
+      id:1,
+      kind:'group',
+      members:[{token:1,port:'single'},{token:3,port:'single'}],
+      form:'underline',
+      mark:''
+    }]
+  }]};
+  await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
+  await page.waitForTimeout(50);
+
+  await page.locator('.word[data-index="3"]').click();
+  await press(page,'h');
+  assert.equal((await currentCursor(page)).word,2);
+
+  await page.locator('.word[data-index="1"]').click();
+  await press(page,'l');
+  assert.equal((await currentCursor(page)).word,2);
 });
 
 test('l reaches President through adjacent child and parent underlines', async ({ page }) => {

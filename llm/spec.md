@@ -38,7 +38,7 @@ active規則の完全な列挙は `llm/rules.json` を正本とし、`llm/rule-a
 - `verbals`: 各 token の準動詞 T 状態
 - `groups`: V 下線 group
 - `gaps`: token 境界に置く境界記号
-- `boundarySlots`: `gaps` の文字位置に対応する `[` / `<` のsingle slot
+- `boundarySlots`: `gaps` の文字位置に対応する `[` のsingle slot
 - `gapTokens`: token境界ごとの疑似トークン列。各疑似トークンは表面文字列とsingle slotを1つ持つ
 - `arrows`: 修飾矢印
 - `cursor`, `cursorSlot`: 現在選択中の token と slot
@@ -76,7 +76,7 @@ active規則の完全な列挙は `llm/rules.json` を正本とし、`llm/rule-a
 - 戻り値は slot の `width`, `minWidth`, `height`, `left` と `containerWidth`。
 - DOM側は文字幅だけを計測し、`slotGeometry()` で純粋関数へ渡し、`applySlotGeometry()` で結果を反映する。
 - 通常slot、double左右、token T左右、group標識、group T左右、V下線、V選択カーソルは同じ経路を使う。
-- BORDER位置カーソルと文末ダミーはslotではないため、このgeometryの対象外。`[` / `<` の境界slotはsingle geometryを使う。
+- BORDER位置カーソルと文末ダミーはslotではないため、このgeometryの対象外。`[` の境界slotはsingle geometryを使う。
 
 T は左右 slot を持つ。
 
@@ -121,7 +121,7 @@ V 下線 group は `groups` に保持される。
 
 `gaps` は token 境界に置く文字列配列。長さは `tokens.length + 1`。
 
-`[` と `<` は文字列内の出現位置に対応するsingle slotを持つ。runtimeでは `boundarySlots[gap][boundaryIndex]`、inner_jsonでは `boundarySlots[localGap][boundaryIndex]` にslotを保存し、参照は `{boundary, boundaryIndex, port:'single'}` とする。同じ境界に複数記号があっても文字位置で区別する。
+`[` は文字列内の出現位置に対応するsingle slotを持つ。runtimeでは `boundarySlots[gap][boundaryIndex]`、inner_jsonでは `boundarySlots[localGap][boundaryIndex]` にslotを保存する。同じ境界に複数の `[` があっても文字位置で区別する。`<` はslotを持たない。
 
 `gapTokens` は `gaps` と同じ境界indexを使う配列で、各要素は `{text, slot}` の配列。1つの境界に疑似トークンを0個以上連続して置ける。inner_jsonでは各sentenceの `pseudoTokens` objectへローカル境界indexをキー、疑似トークン配列を値として保存する。旧形式の単一 `{text, slot}` はindex 0の1要素配列として読み込む。疑似トークンは原文 `text` を変更せず、通常tokenと同じ文字段とsingle標識slotを表示する。
 
@@ -137,8 +137,8 @@ V 下線 group は `groups` に保持される。
 - 境界位置 0 は文頭。
 - 境界位置 `tokens.length` は文末。
 - NORMALでは開き記号 `[ < (` を現在単語の左境界、閉じ記号 `) ] >` を現在単語の右境界へ追加する。BORDERでは選択中の境界へ6記号をそのまま追加する。
-- NORMALで `[` / `<` を作成した直後は、その境界slotを通常カーソルで選択する。クリックでも選択でき、`[` には通常の標識キー列で働きの標識を入力できる。
-- `<` の境界slotは標識値が空でも `r` の始点にできる。`h/l` では同じ表示順の隣接する境界slot・疑似トークン・通常トークンへ移動する。
+- NORMALで `[` を作成した直後は、その境界slotを通常カーソルで選択する。クリックでも選択でき、通常の標識キー列で働きの標識を入力できる。
+- `<` はslotを持たず、通常slot移動の対象にもならない。BORDERで現在境界に `<` があるとき `r` を押すと、その境界文字自体を始点にして矢印選択へ移る。同じ境界に複数ある場合は文字列内で最後の `<` を使う。
 - `b` で境界編集モードに入り、`h/l/0/$` で境界を移動できる。
 - 境界編集モードの表示順では通常tokenと疑似トークンをどちらも1要素として数える。疑似トークンがn個ある境界には前・間・後のn+1位置があり、`h/l` 1回で疑似トークン1個を跨ぐ。
 - 境界編集モード中の `/` は現在位置へ新しい疑似トークンを挿入する。確定後もBORDERに留まり、カーソルは挿入した疑似トークンの直後へ移る。
@@ -151,7 +151,7 @@ V 下線 group は `groups` に保持される。
 
 `arrows` は `{from, to}` の配列。
 
-- 始点にできるのは、表示値が `a`, `ad`, `副詞的目的格`, `同格` の slot、または `<` の境界slot。
+- 始点にできるのは、表示値が `a`, `ad`, `副詞的目的格`, `同格` の slot、またはBORDERの `r` で指定したslotなしの `<` 境界文字。
 - `r` で矢印作成を開始し、移動後 `Enter` で確定。
 - 終点には通常トークン、疑似トークン、groupの有効なslotを指定できる。疑似トークンはクリックまたは `h` / `l` 移動で選択し、inner_jsonでは `{pseudoToken, pseudoIndex, port:'single'}` として保存する。
 - 疑似トークンを端点とする矢印の表示行は、word indexではなく疑似トークンDOMが属する実際の表示行から求める。矢印の左右順は通常・疑似トークン共通列を使う。
@@ -225,7 +225,8 @@ inner_jsonの構造:
 
 移動:
 
-- `h` / `l`: 表示 slot を左右移動。同じ表示高の隣tokenの実slot、親groupの直接兄弟、同じV下線の葉slotという優先関係を使う。同じV下線の探索段階では、方向側に葉slotがあれば内容が空でも優先する。
+- `h` / `l`: 表示 slot を左右移動。同じ表示高の隣tokenの実slot、親groupの直接兄弟、同じ連続下線区間の葉slotという優先関係を使う。同じ連続区間の探索段階では、方向側に葉slotがあれば内容が空でも優先する。
+- 非連続下線の区間端から区間間gapの方向へ `h/l` すると、別区間へ直接飛ばず、表示上隣接する未所属slotへ空でも移動する。たとえば `is` と `taking` が同じ非連続groupで `she` が未所属なら、`is` の `l` と `taking` の `h` はともに `she` へ移る。
 - `h` / `l` が行境界を跨ぐ場合、移動先行の境界tokenに実表示slotがあれば、そのtokenを内包するgroupのslotより境界token自身を優先する。たとえば次行先頭からの `h` は前行末tokenの表示slotへ戻る。
 - double/Tの左右slotを持つtokenに隣接して疑似トークンがあっても、token内部の移動を先に行う。左slotから`l`で右slot、右slotから`h`で左slotへ移動し、外側slotからさらに進んだときだけ隣接疑似トークンへ出る。
 - `j`: 下移動。現在列を保ったまま、内側 slot から包含 V 下線へ一段ずつ移動。構造上の移動先がなければ次の行へ移動する。
@@ -248,6 +249,7 @@ inner_jsonの構造:
 - `ado`: 副詞的目的格
 - `ap`: 同格
 - `sad`: 文ad
+- `ead`: 誘導ad
 - `ac`: aC
 - `aux`: aux
 - `nc`: nC
@@ -268,7 +270,7 @@ inner_jsonの構造:
 - `b`: 境界編集モード
 - `[ < (`: NORMALでは現在単語の左境界へ追加
 - `) ] >`: NORMALでは現在単語の右境界へ追加
-- `r`: `<` / a / ad / 副詞的目的格 / 同格から矢印作成開始
+- `r`: NORMALではa / ad / 副詞的目的格 / 同格slot、BORDERでは現在境界の `<` から矢印作成開始
 - `R`: 現在 slot 始点の矢印削除
 
 履歴:
