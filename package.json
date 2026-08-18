@@ -1,6 +1,8 @@
 {
   "scripts": {
-    "test": "node tests/browser/key-tests.mjs"
+    "test": "node scripts/audit-rules.mjs && node tests/browser/key-tests.mjs",
+    "test:rules": "node scripts/audit-rules.mjs",
+    "test:browser": "node tests/browser/key-tests.mjs"
   },
   "devDependencies": {}
 }

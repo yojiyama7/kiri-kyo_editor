@@ -12,7 +12,7 @@
 ## 維持した文書状態
 
 - `tokens`, `sentenceRanges`: 入力をtoken列と改行単位へ正規化した編集モデル。
-- `workSlots`, `verbals`, `groups`, `gaps`, `arrows`: ユーザーが作成する構造そのもの。
+- `workSlots`, `verbals`, `groups`, `gaps`, `boundarySlots`, `arrows`: ユーザーが作成する構造そのもの。`boundarySlots` は `[` / `<` の文字位置に対応するsingle slot。
 - `nextGroupId`: group削除後もIDを不用意に再利用しないための単調増加値。
 
 ## 維持した操作状態
@@ -25,6 +25,7 @@
 - `directEditing`: `/`入力用DOM、対象ref、履歴開始点。
 - `arrowDraft`, `arrowHistoryBefore`: 矢印終点選択と、複数キー操作を1履歴にまとめる開始点。
 - `gapMode`, `gapCursor`: 境界編集モードと境界位置。
+- `boundaryCursor`: NORMALで選択中の `[` / `<` 境界slot参照。
 - `groupSelection`: V選択の固定済みpath列 `paths`、activeなslot列 `path`、選択中フラグ。
 - `markUndoStack`, `markRedoStack`, `inputHistoryBefore`: undo/redoとtextarea入力の履歴境界。
 

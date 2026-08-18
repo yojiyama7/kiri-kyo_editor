@@ -351,3 +351,109 @@
 - 原因は`makeArrowLayout()`が疑似トークンにもword indexを要求し、行indexが`-1`になってlayoutを破棄していたこと。疑似トークンは実DOMの`.word`矩形から表示行を求めるよう変更。
 - 矢印の前後判定に使う`flattenedDisplayOrder()`も共通token列へ移し、行末疑似トークンを直前tokenの右側として扱う。
 - inner_json保存、`r l Enter`、既存矢印の再描画、実際のmarker付きSVG path生成を検証。ブラウザテスト結果: 95 passed。
+
+## 2026-08-18 矢印と重なるgroup slotの下方補正
+
+- 矢印が子groupの標識slotを横切るケースをブラウザテストへ追加し、子下線・標識slot・それを包む親下線のY座標が矢印なしの場合から変化しない失敗を確認。修正前は1 failed, 96 passed。
+- 矢印描画と衝突判定が同じlayout・端点offsetを使うよう、表示用layout生成を`arrowLayoutsForRendering()`へ抽出。
+- layoutを実際に描く水平・垂直線分へ変換し、端点以外の表示値を持つgroup標識slotまたはgroup T slotの矩形と交差したgroupだけを27px下げるよう変更。
+- 下線を引き直す既存処理にgroup ID集合を渡すため、slotだけでなくgroup下線全体が下がり、包含する親下線にも既存の重なり間隔が伝播する。inner_jsonは変更しない。
+- render・resize・scrollで同じ`drawDisplayOverlays()`を利用。子下線・slot・親下線がすべて正確に27px下がることを検証し、ブラウザテスト結果: 97 passed。
+
+## 2026-08-18 anyへの矢印の余分な下方レーン
+
+- 提供データの2本の矢印を再現し、下段groupの`a`から`any`の`O`へ向かう矢印が、始点下端150pxから水平線177pxまで27px下りる失敗を確認。修正前は1 failed, 97 passed。
+- 原因は2本の矢印の水平範囲だけを比較して競合と判定し、既に別の高さにあるにもかかわらず外側の矢印へ追加の12pxレベルを割り当てていたこと。
+- 各水平区間へ基本レーンの実Y座標を持たせ、水平範囲と実Y座標の両方が重なる場合だけ別レベルへ送るよう変更。異なる基本高の矢印はlevel 0を共有する。
+- `any`への矢印の水平線が始点下端から15px下の基本レーンに収まることを実ブラウザ座標で検証。ブラウザテスト結果: 98 passed。
+
+## 2026-08-18 T左右の下線member独立性
+
+- token Tの左右と隣接通常slotの3要素について、2要素以上の全部分集合をV操作で作る性質テストを追加。token Tは保存・displayとも既に左右を独立して扱えていた。
+- group Tでも同じ全部分集合テストを追加。通常クリックが背後のwordに奪われる失敗と、DOMクリック後には保存membersが左右を区別する一方、display mask 3が`structure:1:left/right`ではなく内部の`token:0/1:single`へ展開される失敗を確認。修正前は1 failed, 99 passed。
+- `groupPrimitiveSlotMap()`でT groupへの`left/right`参照を再帰展開せず、`structure:<id>:left/right`という独立primitiveとして保持。primitive順にもgroup T左右を隣接配置し、描画側でgroup slot参照へ復元するよう変更。
+- T左右primitiveを使わない従来groupでは、それらを下線区間の分割境界として扱わないよう限定。途中で検出した入れ子下線の重複分割を解消した。
+- group layerを前面へ出し、空group標識だけは単語クリックを奪わないようpointer eventを無効化。group T左右は通常クリックからV選択を開始できる。
+- token Tとgroup Tの左右をそれぞれ含める・含めない全部分集合、既存の入れ子T、下線配置、クリック回帰を検証。ブラウザテスト結果: 100 passed。
+
+## 2026-08-18 of選択時の表示と横移動
+
+- 最初の回帰テストでは外側group `of + (those things)`と外側groupから`any`への矢印をfixtureから落とし、`of`をgroup外slotとしていた。このため実データで発火する「親groupの直接兄弟groupを先に選ぶ」分岐を通らず、誤ってgreenになった。
+- 提供状態どおり、内側group `those things`、外側group `of + child`、内外2本の矢印を持つfixtureへ置換。`of`から`l`でword 2の`a`ではなくgroup 1の`n`へ移るredを確認。修正前は1 failed, 100 passed。
+- `of`は外側groupのmemberなので、`j`は停止せず外側group 2の`a`へ下がるのが正しい。旧fixture由来の停止期待も訂正。
+- 同じ表示高に実表示のある隣tokenを、親groupの直接兄弟判定より前に選ぶよう移動判定を前段へ移した。空slotではこの早期選択を行わず、空groupへは従来どおりgroup自身から入る。
+- 正確なfixtureで`of -> l -> those/a`、`h -> of`、`j -> outer group/a`を検証。全ブラウザテスト結果: 101 passed。
+
+## 2026-08-18 active規則の全列挙とA×A矛盾監査
+
+- `llm/spec.md`、101件のブラウザテスト、実装分岐からactive規則を入力・slot・共通列・group・疑似token・矢印・移動・V選択・表示・JSON・キー・保存・実装境界の13領域へ正規化。
+- `llm/rules.json`へ146規則をID、判断名、適用条件、結果、説明付きで列挙。生成した`llm/rule-audit.md`にも全規則を掲載。
+- 「A×Aの冪集合」は、2規則の矛盾検査という目的に合わせてA×Aの全順序対と解釈。146²=21,316件を`llm/rule-pair-audit.csv`へ出力した。
+- 同じ判断名で条件が同時成立し結果が異なる場合だけ未解決矛盾として監査を失敗させる`scripts/audit-rules.mjs`を追加。ID重複、必須項目、廃止規則のactive残存、置換先IDも検証する。
+- 旧「全group参照をport無視で再帰展開」はgroup T左右独立則と矛盾したため削除し、`single`だけ再帰展開、Tの`left/right`は独立primitiveへ変更。
+- 旧「隣の下線groupへは常にgroup標識へ入る」は同じ表示高の実slot優先則と矛盾したため削除。実表示slot、空group、明示的子group参照の3条件へ分割。
+- T stateの古い例示、空フィールド省略、h/l優先順位、group参照展開の曖昧な仕様文も新規則に合わせて修正。
+- 初回監査では「同じ高さの実slot優先」と「親の直接member優先」を別decisionに分類し、実際には同じ移動先を争う矛盾をorthogonalと誤判定していた。両規則を`horizontal-entry-priority`へ統合し、同じ高さの実slotを優先、直接memberはその候補がない場合だけ、と条件を排他的にした。
+- active A×A再監査結果はself 146、orthogonal 21,118、compatible 52、unresolved conflict 0。廃止3規則は`llm/retired-rules.json`へ理由と置換先を記録。
+- `npm test`で規則監査後にブラウザテストを行うようpackage scriptsを更新。規則監査0 conflict、ブラウザテスト101 passed。
+
+## 2026-08-18 前行末への水平移動
+
+- 提供JSONの1行目に入れ子下線と矢印を置き、2行目先頭の`22.`から`h`で前行末`things`へ戻るテストを追加。修正前は`things`自身の`n`ではなく内側group 1の`n`を選び、1 failed, 101 passedとなることを確認した。
+- 原因は、行を跨ぐ隣tokenにも通常のgroup入口規則を適用し、境界token自身の実表示slotより内包group標識を優先していたこと。
+- 行境界を跨ぐ`h/l`では、境界tokenに実表示slotがある場合にそれを直接選び、ない場合だけ従来のgroup入口判定へフォールバックするよう変更。
+- `22. -> h -> things/n`をword 7かつgroup cursorなしとして検証。全ブラウザテスト結果: 102 passed。
+
+## 2026-08-18 NORMAL閉じ境界記号の右配置
+
+- NORMALで`[ < ( ) ] >`を入力し、全記号が現在単語の左境界へ保存される失敗を確認。修正前は1 failed, 101 passed。
+- 境界番号の決定を純粋関数`calculateNormalBoundaryIndex()`へ抽出。開き記号`[ < (`は現在単語の左、閉じ記号`) ] >`は右へ保存する。
+- BORDERモードは選択中の境界へ入力する既存処理を維持した。
+- ブラウザ挙動と純粋関数を個別に検証。全ブラウザテスト結果: 103 passed。
+
+## 2026-08-18 矢印とgroup標識文字の実衝突判定
+
+- 提供JSONの第20文を縮約し、独立したgroup 4と5のうちgroup 5だけが27px下がる失敗を確認。修正前は1 failed, 103 passed。
+- 原因は矢印と文字の衝突判定に、中央の短い文字ではなく最小幅を含むgroup slot全体の矩形を使っていたこと。矢印が透明な左余白を通っただけでも衝突扱いされていた。
+- DOM Rangeで実際の表示文字範囲を測り、矢印線幅のため上下左右へ1pxだけ広げた矩形を衝突判定へ使うよう変更。
+- 旧「実衝突」テストも透明領域しか横切っていなかったため、表示文字自体を横切るfixtureへ修正。真の衝突では27px下降し、透明余白では独立下線が同じ高さを維持することを別々に検証した。
+- 全ブラウザテスト結果: 104 passed。
+
+## 2026-08-18 矢印水平レーンと下線帯の分離
+
+- 提供JSONの第22文を縮約し、`every day`の`副詞的目的格`から`had`の`(3)`へ向かう水平線が、`at regular times`の下線とほぼ同じ高さになる状態を再現。
+- 修正前の実測は、group 7下線が矢印なしで73px、表示時100px、`every day`水平線が102pxで、最終的に2pxしか離れていなかった。追加テストだけが失敗し、既存104件の通過を確認した。
+- 最終描画された各下線の2px線から直下group標識slot下端までを水平レーンの予約帯として収集し、X範囲が重なる矢印を帯の外へ出るまで12px刻みで下げるよう変更。
+- 縦線との交差は許容し、レーン障害には含めない。第22文で水平線とgroup 7下線の差が24px以上になることを検証。
+- 全ブラウザテスト結果: 105 passed。
+
+## 2026-08-18 下線内部矢印の基本縦長維持
+
+- 第21文を縮約し、`a -> n`内部矢印の始点縦線が27px、group `ad -> (1)`矢印が15pxとなる失敗を確認。修正前は1 failed, 105 passed。
+- 原因は水平レーンの下線帯回避が、矢印の両端を含む自分自身のgroupにも適用され、内部矢印だけ1レーン12px余計に下げていたこと。
+- 各矢印について両端を正確な再帰葉参照として含むgroup IDを導出し、そのgroupの下線・標識帯だけをレーン障害物から除外した。
+- 第21文で内部`a`矢印と外側`ad`矢印の始点縦線がともに15pxとなること、第22文では無関係な`at regular times`帯を引き続き避けることを検証。
+- 全ブラウザテスト結果: 106 passed。
+
+## 2026-08-18 同格標識と修飾矢印
+
+- `ap -> 同格`の入力テストと、`ap -> r -> l -> Enter`で同格slotから矢印を作るテストを追加。修正前は2 failed, 106 passed。
+- `a`保留中の`p`を同格として即時確定し、前置詞`pre`の入力開始へ誤って流れないよう分岐を追加。
+- 矢印始点の許可値を純粋コア`isArrowSourceValue()`へ集約し、UIの作成判定と`cleanupArrows()`の保存整合性判定で共有。`a`, `ad`, `副詞的目的格`, `同格`を許可した。
+- 操作ガイドと仕様の標識・矢印始点一覧へ`ap / 同格`を追加。
+- 全ブラウザテスト結果: 108 passed。
+
+## 2026-08-18 境界slotと`<`始点矢印
+
+- `[`作成後に`S`を入力してinner_jsonへ保存・再読込できること、`< r l Enter`で通常tokenへ矢印を作れることをブラウザテストへ追加。修正前は2 failed, 108 passed。
+- `gaps`文字列との後方互換性を保ちつつ、`[` / `<`の文字位置に対応する`boundarySlots`と`boundaryCursor`を追加。inner_json参照は`{boundary,boundaryIndex,port:'single'}`とした。
+- NORMALで`[` / `<`を作成した直後とクリック時に境界slotを選択し、通常の標識入力を利用可能にした。横移動列にも境界slotを加えたが、V group選択対象には加えていない。
+- 矢印始点判定を純粋コア`isArrowSourceRef()`へ集約し、`<`は空slotのままでも始点として許可。保存整合性判定も同じ関数を使う。
+- 境界slotの実DOM行を用いて矢印を描画し、inner_json round-tripとmarker付きSVG path生成を検証。全ブラウザテスト結果: 110 passed。
+
+## 2026-08-18 複数行下線の行別Y座標
+
+- 1つのgroupがブラウザ折返しで2行になるfixtureを追加。修正前は下線DOMが2本あってもY座標が1種類だけとなり、1 failed, 110 passedになることを確認した。
+- 原因はgroup全体の最下段slot下端から`commonUnderlineY`を1つだけ算出し、すべての表示行へ同じ値を使っていたこと。上段の線が下段の高さへ落ち、右下に孤立して見えていた。
+- 既存の包含・重なりlevelで得た共通Yから、group全体の基準下端と各行の局所基準下端との差だけを引くよう変更。各行のtoken、実標識、可視カーソルを局所基準へ含め、27pxのgroup間隔は維持した。
+- 折返し行数と下線本数が一致し、各行のYが別になり、その行のtoken直下40px以内に収まることを検証。全ブラウザテスト結果: 111 passed。

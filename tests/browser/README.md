@@ -1,6 +1,6 @@
 # Browser Key Tests
 
-`key-tests.mjs` は Playwright で `index.html` を直接開き、主要キー操作を 1 件ずつブラウザ上で検証する。
+`key-tests.mjs` は Playwright で `index.html` を直接開き、主要キー操作を 1 件ずつブラウザ上で検証する。`npm test` は先にactive規則集合Aの全ペア矛盾監査を実行し、その後ブラウザテストを実行する。
 
 ローカルに Node.js と Playwright がある場合:
 

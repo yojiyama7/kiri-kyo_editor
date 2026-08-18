@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "retired": [
+    {
+      "id": "OLD-JS-01",
+      "removed": "2026-08-18",
+      "supersededBy": ["JS-04", "JS-05"],
+      "text": "すべてのgroup参照をportに関係なく子groupの基礎slotへ再帰展開する。",
+      "reason": "group Tのleft/rightを独立基礎slotとする新規則と矛盾するため削除。"
+    },
+    {
+      "id": "OLD-MV-01",
+      "removed": "2026-08-18",
+      "supersededBy": ["MV-05", "MV-06", "MV-07"],
+      "text": "下線groupの隣へ外側から入る場合は常にgroup標識を選ぶ。",
+      "reason": "同じ表示高に実表示token slotがある場合はそのslotを優先する新規則と矛盾するため削除。"
+    },
+    {
+      "id": "OLD-MV-02",
+      "removed": "2026-08-18",
+      "supersededBy": ["MV-05", "MV-08", "MV-09"],
+      "text": "親groupの直接兄弟memberを、同じ表示高の隣tokenより常に先に選ぶ。",
+      "reason": "同じ表示高の実tokenを直接兄弟groupより先に選ぶ新規則と矛盾するため削除。"
+    }
+  ]
+}

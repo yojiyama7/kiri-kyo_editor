@@ -11,8 +11,20 @@
   });
 
   const pseudoList = value => Array.isArray(value) ? value : value?.text ? [value] : [];
+  const arrowSourceValues = Object.freeze(['ad','a','副詞的目的格','同格']);
+  const isArrowSourceValue = value => arrowSourceValues.includes(value);
   const pseudoIndexOf = ref => Number(ref?.gapTokenIndex || 0);
   const pseudoAt = (state,ref) => pseudoList(state.gapTokens?.[ref?.gapToken])[pseudoIndexOf(ref)] || null;
+  const boundaryIndexOf = ref => Number(ref?.boundaryIndex || 0);
+  const boundaryAt = (state,ref) => {
+    const gap=ref?.boundary;
+    const index=boundaryIndexOf(ref);
+    const symbol=state.gaps?.[gap]?.[index];
+    const slot=state.boundarySlots?.[gap]?.[index];
+    return symbol ? {symbol,slot:slot || null} : null;
+  };
+  const isArrowSourceRef = (state,ref) => boundaryAt(state,ref)?.symbol === '<'
+    || isArrowSourceValue(displayValue(state,ref));
 
   function normalizeTState(value){
     if(!value) return null;
@@ -157,6 +169,13 @@
     return target ? clone(target) : null;
   }
 
+  function calculateNormalBoundaryIndex({cursor=0,tokenCount=0,symbol=''} = {}){
+    const count=Math.max(0,Number(tokenCount) || 0);
+    const current=Math.max(0,Math.min(count,Number(cursor) || 0));
+    const offset=[')',']','>'].includes(symbol) ? 1 : 0;
+    return Math.min(count,current+offset);
+  }
+
   function updateSelectionPath(path, candidate){
     const current=Array.isArray(path) ? path.map(clone) : [];
     if(!candidate) return current;
@@ -271,7 +290,13 @@
       const keys=new Set();
       for(const member of group.members || []){
         if(member?.structure != null){
-          for(const key of collect(member.structure,nextVisiting)) keys.add(key);
+          const child=byId.get(member.structure);
+          const port=member.port || 'single';
+          if(child?.form === 'T' && (port === 'left' || port === 'right')){
+            keys.add(`structure:${member.structure}:${port}`);
+          }else{
+            for(const key of collect(member.structure,nextVisiting)) keys.add(key);
+          }
         }else{
           for(const key of primitiveKeysForToken(sentence,member)) keys.add(key);
         }
@@ -287,12 +312,45 @@
   function primitiveSlotOrder(sentence){
     const order=[];
     const tokens=sentence.tokens || [];
+    const groups=sentence.groups || (sentence.structures || []).filter(item => item.kind === 'group');
+    const byId=new Map(groups.map(group => [group.id,group]));
+    const extentMemo=new Map();
+    const groupExtent=(groupId,visiting=new Set()) => {
+      if(extentMemo.has(groupId)) return extentMemo.get(groupId);
+      if(visiting.has(groupId)) return {start:0,end:0};
+      const next=new Set(visiting).add(groupId);
+      const positions=[];
+      for(const member of byId.get(groupId)?.members || []){
+        if(member?.structure != null){
+          const child=groupExtent(member.structure,next);
+          positions.push(child.start,child.end);
+        }else if(member?.pseudoToken != null){
+          positions.push(Number(member.pseudoToken));
+        }else if(member?.token != null){
+          positions.push(Number(member.token));
+        }
+      }
+      const extent=positions.length
+        ? {start:Math.min(...positions),end:Math.max(...positions)}
+        : {start:0,end:0};
+      extentMemo.set(groupId,extent);
+      return extent;
+    };
     for(const item of createTokenSequence(tokens.length,sentence.pseudoTokens || [])){
       if(item.kind === 'pseudo-token'){
         order.push(`pseudo-token:${item.gap}:${item.index}:single`);
       }else{
         order.push(...primitiveTokenPorts(sentence,tokens[item.index],item.index)
           .map(port => `token:${item.index}:${port}`));
+        const ending=groups
+          .filter(group => group.form === 'T' && groupExtent(group.id).end === item.index)
+          .sort((left,right) => {
+            const a=groupExtent(left.id), b=groupExtent(right.id);
+            return (a.end-a.start)-(b.end-b.start) || left.id-right.id;
+          });
+        for(const group of ending){
+          order.push(`structure:${group.id}:left`,`structure:${group.id}:right`);
+        }
       }
     }
     return order;
@@ -301,7 +359,9 @@
   function primitiveSlotRuns(order,selected){
     const runs=[];
     let active=null;
+    const usesStructureSlots=[...selected].some(key => key.startsWith('structure:'));
     for(const key of order){
+      if(!usesStructureSlots && key.startsWith('structure:')) continue;
       if(!selected.has(key)){
         active=null;
         continue;
@@ -450,6 +510,7 @@
     };
     const sentenceForRef=ref => {
       if(ref?.group != null) return sentenceForGroup(ref.group);
+      if(ref?.boundary != null) return sentenceIndexForGap(ranges,ref.boundary);
       if(ref?.gapToken != null){
         return sentenceIndexForGap(ranges,ref.gapToken);
       }
@@ -459,6 +520,8 @@
     for(const range of ranges){
       const localRef=ref => ref?.group != null
         ? {structure:ref.group,port:ref.slot || 'single'}
+        : ref?.boundary != null
+          ? {boundary:ref.boundary-range.start,boundaryIndex:boundaryIndexOf(ref),port:'single'}
         : ref?.gapToken != null
           ? {pseudoToken:ref.gapToken-range.start,pseudoIndex:pseudoIndexOf(ref),port:'single'}
         : {token:(ref?.word ?? range.start)-range.start,port:ref?.slot || 'single'};
@@ -495,10 +558,18 @@
       if(structures.length) sentence.structures=structures;
 
       const boundaries={};
+      const boundarySlots={};
       const pseudoTokens={};
       for(let gap=range.start;gap<=range.end;gap++){
         if(sentenceIndexForGap(ranges,gap) !== range.index) continue;
         if(state.gaps?.[gap]) boundaries[gap-range.start]=state.gaps[gap];
+        const slots=state.boundarySlots?.[gap] || [];
+        const persistent=Object.fromEntries(slots
+          .map((slot,index) => slot && state.gaps?.[gap]?.[index] === '['
+            ? [index,persistentSlot(slot)]
+            : null)
+          .filter(Boolean));
+        if(Object.keys(persistent).length) boundarySlots[gap-range.start]=persistent;
         const pseudos=pseudoList(state.gapTokens?.[gap]);
         if(pseudos.length){
           pseudoTokens[gap-range.start]=pseudos.map(pseudo => ({
@@ -508,6 +579,7 @@
         }
       }
       if(Object.keys(boundaries).length) sentence.boundaries=boundaries;
+      if(Object.keys(boundarySlots).length) sentence.boundarySlots=boundarySlots;
       if(Object.keys(pseudoTokens).length) sentence.pseudoTokens=pseudoTokens;
 
       const arrows=(state.arrows || [])
@@ -539,6 +611,16 @@
       for(const [local,value] of Object.entries(sentence.boundaries || {})){
         state.gaps[offset+Number(local)]=value;
       }
+      for(const [local,value] of Object.entries(sentence.boundarySlots || {})){
+        const gap=offset+Number(local);
+        state.boundarySlots[gap]=[];
+        for(const [index,slot] of Object.entries(value || {})){
+          const boundaryIndex=Number(index);
+          if(state.gaps[gap]?.[boundaryIndex] === '['){
+            state.boundarySlots[gap][boundaryIndex]={enabled:true,...persistentSlot(slot)};
+          }
+        }
+      }
       for(const [local,value] of Object.entries(sentence.pseudoTokens || {})){
         state.gapTokens[offset+Number(local)]=pseudoList(value).map(pseudo => ({
           text:String(pseudo?.text || ''),
@@ -552,6 +634,8 @@
     for(const sentence of inner.sentences || []){
       const localRef=ref => ref?.structure != null
         ? {group:ref.structure,slot:ref.port === 'single' ? null : ref.port}
+        : ref?.boundary != null
+          ? {boundary:offset+ref.boundary,boundaryIndex:Number(ref.boundaryIndex || 0),slot:null}
         : ref?.pseudoToken != null
           ? {gapToken:offset+ref.pseudoToken,gapTokenIndex:Number(ref.pseudoIndex || 0),slot:null}
         : {word:offset+(ref?.token || 0),slot:ref?.port === 'single' ? null : ref?.port};
@@ -639,10 +723,12 @@
       arrowDraft:null,
       arrowHistoryBefore:null,
       gaps:Array.from({length:parsed.tokens.length + 1}, () => ''),
+      boundarySlots:Array.from({length:parsed.tokens.length + 1}, () => []),
       gapTokens:Array.from({length:parsed.tokens.length + 1}, () => []),
       gapMode:false,
       gapCursor:0,
       gapTokenCursor:null,
+      boundaryCursor:null,
       groups:[],
       nextGroupId:1,
       groupSelection:null,
@@ -668,11 +754,13 @@
       next.workSlots=parsed.tokens.map((_, index) => next.workSlots[index] || makeWorkSlot());
       next.verbals=parsed.tokens.map((_, index) => normalizeTState(next.verbals[index]) || makeTState(false));
       next.gaps=Array.from({length:parsed.tokens.length + 1}, (_, index) => next.gaps[index] || '');
+      next.boundarySlots=Array.from({length:parsed.tokens.length + 1}, (_, index) => next.boundarySlots?.[index] || []);
       next.gapTokens=Array.from({length:parsed.tokens.length + 1}, (_, index) => pseudoList(next.gapTokens?.[index]));
       next.cursor=Math.max(0, Math.min(next.cursor, next.tokens.length));
       const borderPositions=calculateBorderPositions(next.tokens.length,next.gapTokens);
       next.gapCursor=Math.max(0, Math.min(next.gapCursor, borderPositions.length-1));
       if(next.gapTokenCursor != null && !pseudoAt(next,next.gapTokenCursor)) next.gapTokenCursor=null;
+      if(next.boundaryCursor != null && !boundaryAt(next,next.boundaryCursor)?.slot) next.boundaryCursor=null;
     });
   }
 
@@ -815,6 +903,11 @@
 
   function sameDisplayRef(left, right){
     if(!left || !right) return false;
+    if(left.boundary != null || right.boundary != null){
+      return left.boundary != null && right.boundary != null
+        && left.boundary === right.boundary
+        && boundaryIndexOf(left) === boundaryIndexOf(right);
+    }
     if(left.gapToken != null || right.gapToken != null){
       return left.gapToken != null && right.gapToken != null
         && left.gapToken === right.gapToken
@@ -834,6 +927,9 @@
       const group=groupById(state, ref.group);
       return group ? sentenceOfRef(state, group.segments?.[0]?.startRef) : -1;
     }
+    if(ref.boundary != null){
+      return sentenceIndexForGap(state.sentenceRanges,ref.boundary);
+    }
     if(ref.gapToken != null){
       return sentenceIndexForGap(state.sentenceRanges,ref.gapToken);
     }
@@ -848,6 +944,7 @@
 
   function displayValue(state, ref){
     if(!ref) return '';
+    if(ref.boundary != null) return boundaryAt(state,ref)?.slot?.text || '';
     if(ref.gapToken != null) return pseudoAt(state,ref)?.slot?.text || '';
     if(ref.group != null){
       const group=groupById(state, ref.group);
@@ -867,6 +964,10 @@
 
   function validDisplayRef(state, ref){
     if(!ref) return false;
+    if(ref.boundary != null){
+      const boundary=boundaryAt(state,ref);
+      return boundary?.symbol === '<' || Boolean(boundary?.slot?.enabled);
+    }
     if(ref.gapToken != null) return Boolean(pseudoAt(state,ref)?.slot?.enabled);
     if(ref.group != null){
       const group=groupById(state, ref.group);
@@ -887,14 +988,13 @@
 
   function cleanupArrows(previous){
     return evolve(previous, next => {
-      const allowed=new Set(['ad','a','副詞的目的格']);
       next.arrows=next.arrows.filter(arrow =>
         validDisplayRef(next, arrow.from)
         && validDisplayRef(next, arrow.to)
         && sentenceOfRef(next, arrow.from) === sentenceOfRef(next, arrow.to)
-        && allowed.has(displayValue(next, arrow.from))
+        && isArrowSourceRef(next,arrow.from)
       );
-      if(next.arrowDraft && (!validDisplayRef(next, next.arrowDraft) || !allowed.has(displayValue(next, next.arrowDraft)))){
+      if(next.arrowDraft && (!validDisplayRef(next, next.arrowDraft) || !isArrowSourceRef(next,next.arrowDraft))){
         next.arrowDraft=null;
         next.arrowHistoryBefore=null;
       }
@@ -910,6 +1010,7 @@
     createTokenSequence,
     sentenceIndexForGap,
     calculateColumnPreservingTarget,
+    calculateNormalBoundaryIndex,
     calculateBorderPositions,
     calculateContainedHorizontalTarget,
     calculateGridHorizontalTarget,
@@ -921,6 +1022,8 @@
     makeTState,
     makeWorkSlot,
     insertPseudoToken,
+    isArrowSourceRef,
+    isArrowSourceValue,
     normalizeTState,
     parseSentences,
     calculateUnderlineLayouts,

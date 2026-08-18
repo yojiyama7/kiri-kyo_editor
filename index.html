@@ -92,7 +92,7 @@
     position:absolute;
     left:0;
     top:0;
-    z-index:1;
+    z-index:4;
     pointer-events:none;
     overflow:visible;
   }
@@ -215,6 +215,9 @@
     width:0;
     font-size:14px;
     line-height:18px;
+  }
+  .group-mark:empty{
+    pointer-events:none;
   }
   .group-mark.group-mark-cursor{
     background:var(--cursor);
@@ -353,6 +356,29 @@
   }
   .gap-marker.has-symbol.gap-cursor::after{
     display:none;
+  }
+  .boundary-slot-item{
+    position:relative;
+    display:inline-flex;
+    align-items:flex-start;
+    justify-content:center;
+    min-width:28px;
+    height:64px;
+    cursor:pointer;
+  }
+  .boundary-symbol{
+    line-height:46px;
+  }
+  .boundary-mark{
+    position:absolute;
+    top:44px;
+    left:50%;
+    transform:translateX(-50%);
+    font-size:14px;
+    line-height:18px;
+  }
+  .boundary-mark.mark-cursor{
+    z-index:5;
   }
   .gap-token{
     flex:0 0 auto;
@@ -852,6 +878,7 @@
       <span><kbd>a</kbd> 形容詞</span>
       <span><kbd>a</kbd><kbd>d</kbd> ad</span>
       <span><kbd>a</kbd><kbd>d</kbd><kbd>o</kbd> 副詞的目的格</span>
+      <span><kbd>a</kbd><kbd>p</kbd> 同格</span>
       <span><kbd>s</kbd><kbd>a</kbd><kbd>d</kbd> 文ad</span>
       <span><kbd>a</kbd><kbd>c</kbd> aC</span>
       <span><kbd>a</kbd><kbd>u</kbd><kbd>x</kbd> aux</span>
@@ -864,7 +891,7 @@
       <span><kbd>-</kbd><kbd>3</kbd>〜<kbd>-</kbd><kbd>5</kbd> -(3)〜-(5)</span>
       <span><kbd>x</kbd> 記号削除</span>
       <span><kbd>X</kbd> 構造削除（T / V下線）</span>
-      <span><kbd>r</kbd> a / ad / 副詞的目的格から修飾矢印</span>
+      <span><kbd>r</kbd> a / ad / 副詞的目的格 / 同格から修飾矢印</span>
       <span><kbd>Enter</kbd> 矢印確定</span>
       <span><kbd>R</kbd> 矢印削除</span>
       <span><kbd>i</kbd> INSERT</span>
@@ -896,7 +923,7 @@
       <li><kbd>/</kbd>：現在のslotへ任意の文字列を直接入力します。通常slot、二重slot左右、T左右、V下線slot、V下線T左右で共通です。既存文字列の末尾から編集を開始し、<kbd>Enter</kbd>で確定、<kbd>Esc</kbd>で入力開始前へ戻し、<kbd>Backspace</kbd>で末尾1文字、<kbd>Delete</kbd>で全文字を削除します。</li>
       <li><kbd>s</kbd> → S、<kbd>s</kbd><kbd>'</kbd> → S'、<kbd>v</kbd> → V、<kbd>o</kbd> → O、<kbd>c</kbd> → C、<kbd>m</kbd> → M、<kbd>+</kbd> → +。</li>
       <li><kbd>con</kbd> → 接、<kbd>pre</kbd> → 前。</li>
-      <li><kbd>a</kbd> → a、<kbd>ad</kbd> → ad、<kbd>ado</kbd> → 副詞的目的格、<kbd>sad</kbd> → 文ad、<kbd>ac</kbd> → aC、<kbd>aux</kbd> → aux、<kbd>nc</kbd> → nC。</li>
+      <li><kbd>a</kbd> → a、<kbd>ad</kbd> → ad、<kbd>ado</kbd> → 副詞的目的格、<kbd>ap</kbd> → 同格、<kbd>sad</kbd> → 文ad、<kbd>ac</kbd> → aC、<kbd>aux</kbd> → aux、<kbd>nc</kbd> → nC。</li>
       <li><kbd>1</kbd>〜<kbd>5</kbd> → (1)〜(5)、<kbd>-</kbd>の後に<kbd>3</kbd>〜<kbd>5</kbd> → -(3)〜-(5)。</li>
       <li>a / ad / ado など複数キーの標識は途中状態が保留表示されます。<kbd>Esc</kbd> で保留入力を取り消せます。別の操作へ進むと、成立している候補は確定されます。</li>
       <li><kbd>x</kbd>：現在選択している働きの標識を削除します。</li>
@@ -937,7 +964,7 @@
 
     <h3>修飾矢印</h3>
     <ul>
-      <li>始点にできるのは、標識が a / ad / 副詞的目的格 のslotです。そのslot上で<kbd>r</kbd>を押すと終点選択を開始します。</li>
+      <li>始点にできるのは、標識が a / ad / 副詞的目的格 / 同格 のslotです。そのslot上で<kbd>r</kbd>を押すと終点選択を開始します。</li>
       <li>終点選択中も<kbd>h</kbd>/<kbd>l</kbd>/<kbd>j</kbd>/<kbd>k</kbd>/<kbd>0</kbd>/<kbd>$</kbd>で移動できます。</li>
       <li><kbd>Enter</kbd>：現在slotを終点として確定。通常トークンと疑似トークンのslotをどちらも終点にできます。<kbd>Esc</kbd>：取消。<kbd>r</kbd>をもう一度押すと始点を選び直します。</li>
       <li>1つの始点から保持できる矢印は1本です。新しく確定すると、その始点からの既存矢印を付け替えます。</li>
@@ -1001,12 +1028,14 @@
   // gaps[i] は「単語 i-1 と i の間」。
   // 0 は文頭、tokens.length は文末。入れ子のため複数記号を保持できる。
   let gaps = [];
+  let boundarySlots = []; // gaps の文字位置に対応する '[' / '<' の働きスロット
   let gapTokens = []; // 境界ごとの疑似token列: Array<Array<{text, slot}>>
   // gaps[i] は「位置 i の左側」の境界記号。
   // i == tokens.length は文末ダミー位置の左、つまり文末境界。
   let gapMode = false;
   let gapCursor = 0; // 通常tokenと疑似tokenを1要素ずつ跨ぐ境界位置列のindex
   let gapTokenCursor = null; // 通常モードで選択中の {gapToken,gapTokenIndex}
+  let boundaryCursor = null; // 通常モードで選択中の {boundary,boundaryIndex}
 
   // 同一文内の1つ以上の区間を1つの構造として束ねる下線グループ。
   // segments が1区間なら通常の連続下線、2区間以上なら離れた下線を同一構造として扱う。
@@ -1036,8 +1065,8 @@
     return {
       mode, pendingKeys, pendingRef, numericPending,
       cursor, cursorSlot, text:input.value, tokens, sentenceRanges,
-      workSlots, verbals, arrows, arrowDraft, arrowHistoryBefore, gaps, gapTokens, gapMode,
-      gapCursor, gapTokenCursor, groups, nextGroupId, groupSelection, groupCursorId,
+      workSlots, verbals, arrows, arrowDraft, arrowHistoryBefore, gaps, boundarySlots, gapTokens, gapMode,
+      gapCursor, gapTokenCursor, boundaryCursor, groups, nextGroupId, groupSelection, groupCursorId,
       groupCursorSlot, groupCursorTarget
     };
   }
@@ -1057,10 +1086,12 @@
     arrowDraft=next.arrowDraft;
     arrowHistoryBefore=next.arrowHistoryBefore;
     gaps=next.gaps;
+    boundarySlots=next.boundarySlots;
     gapTokens=next.gapTokens;
     gapMode=next.gapMode;
     gapCursor=next.gapCursor;
     gapTokenCursor=next.gapTokenCursor;
+    boundaryCursor=next.boundaryCursor;
     groups=next.groups;
     nextGroupId=next.nextGroupId;
     groupSelection=next.groupSelection;
@@ -1221,6 +1252,7 @@
       workSlots: cloneData(workSlots),
       verbals: cloneData(verbals),
       gaps: cloneData(gaps),
+      boundarySlots: cloneData(boundarySlots),
       gapTokens: cloneData(gapTokens),
       groups: cloneData(groups),
       nextGroupId,
@@ -1255,6 +1287,7 @@
     verbals = cloneData(state.verbals || []);
     verbals.forEach(ensureTState);
     gaps = cloneData(state.gaps || []);
+    boundarySlots = cloneData(state.boundarySlots || []);
     gapTokens = cloneData(state.gapTokens || []);
     groups = cloneData(state.groups || []);
     groups.forEach(g => { normalizeGroupRefs(g); ensureGroupVerbal(g); });
@@ -1266,6 +1299,7 @@
     cursor = Math.max(0, Math.min(cursor, tokens.length));
     gapCursor = Math.max(0, Math.min(gapCursor, borderPositions().length-1));
     if(gapTokenCursor != null && !pseudoAtRef(gapTokenCursor)) gapTokenCursor=null;
+    if(boundaryCursor != null && !boundaryAtRef(boundaryCursor)) boundaryCursor=null;
     if(groupCursorId !== null && !groups.some(g => g.id === groupCursorId)){
       clearGroupCursor();
     }
@@ -1327,6 +1361,9 @@
     if(ref.group != null){
       const g = groupById(ref.group);
       return g ? sentenceOfRef(groupSegments(g)[0]?.startRef) : -1;
+    }
+    if(ref.boundary != null){
+      return Core.sentenceIndexForGap(sentenceRanges,ref.boundary);
     }
     if(ref.gapToken != null){
       return Core.sentenceIndexForGap(sentenceRanges,ref.gapToken);
@@ -1393,6 +1430,8 @@
   function primitiveSlotRef(key,wordOffset=0){
     const pseudoMatch=/^pseudo-token:(\d+):(\d+):single$/.exec(key || '');
     if(pseudoMatch) return pseudoRef(wordOffset+Number(pseudoMatch[1]),Number(pseudoMatch[2]));
+    const structureMatch=/^structure:(\d+):(left|right)$/.exec(key || '');
+    if(structureMatch) return {group:Number(structureMatch[1]),slot:structureMatch[2]};
     const match=/^token:(\d+):(single|left|right)$/.exec(key || '');
     if(!match) return null;
     return {
@@ -1419,11 +1458,18 @@
   }
 
   function navigationLeafRefs(){
-    return tokenSequence().flatMap(tokenSequenceItemRefs);
+    const refs=[];
+    for(let gap=0;gap<=tokens.length;gap++){
+      refs.push(...boundaryRefsAt(gap),...pseudoRefsAt(gap));
+      if(gap < tokens.length) refs.push(...intrinsicWordRefs(gap));
+    }
+    return refs;
   }
 
   function navigationColumnsForRef(ref,layouts=groupDisplayLayoutMap(),leafRefs=navigationLeafRefs()){
-    const refs=ref?.gapToken != null
+    const refs=ref?.boundary != null
+      ? [boundaryRef(ref.boundary,ref.boundaryIndex)]
+      : ref?.gapToken != null
       ? [pseudoRef(ref.gapToken,ref.gapTokenIndex)]
       : ref?.group != null
       ? groupLeafRefs(groupById(ref.group),layouts)
@@ -1456,6 +1502,7 @@
 
   function setGroupCursor(id, target = null){
     gapTokenCursor=null;
+    boundaryCursor=null;
     const g = groupById(id);
     if(!g){
       groupCursorId = null;
@@ -1601,6 +1648,23 @@
     return tokenSequence(tokens.length,source)
       .filter(item => item.kind === 'pseudo-token' && item.gap === gap)
       .map(tokenSequenceItemRef);
+  }
+
+  function boundaryRef(boundary,boundaryIndex=0){
+    return {boundary,boundaryIndex,slot:null};
+  }
+
+  function boundaryAtRef(ref,slotSource=boundarySlots,gapSource=gaps){
+    const index=Number(ref?.boundaryIndex || 0);
+    const symbol=gapSource?.[ref?.boundary]?.[index];
+    const slot=slotSource?.[ref?.boundary]?.[index];
+    return symbol ? {symbol,slot:slot || null} : null;
+  }
+
+  function boundaryRefsAt(gap,slotSource=boundarySlots,gapSource=gaps){
+    return (gapSource?.[gap] || '').split('').flatMap((_,index) =>
+      slotSource?.[gap]?.[index] ? [boundaryRef(gap,index)] : []
+    );
   }
 
   function tokenSequence(tokenCount=tokens.length,pseudos=gapTokens){
@@ -1850,7 +1914,55 @@
         gap.dataset.gapIndex = String(index);
         gap.dataset.gapSide = position?.side || 'single';
         gap.dataset.gapOffset = String(offset);
-        gap.textContent = value;
+        [...value].forEach((symbol,boundaryIndex) => {
+          const ref=boundaryRef(index,boundaryIndex);
+          const boundary=boundaryAtRef(ref);
+          if(!boundary?.slot){
+            const symbolEl=document.createElement('span');
+            symbolEl.className='boundary-symbol-character';
+            symbolEl.textContent=symbol;
+            symbolEl.dataset.boundarySymbolGap=String(index);
+            symbolEl.dataset.boundaryIndex=String(boundaryIndex);
+            gap.append(symbolEl);
+            return;
+          }
+          const item=document.createElement('span');
+          item.className='boundary-slot-item';
+          item.dataset.boundaryGap=String(index);
+          item.dataset.boundaryIndex=String(boundaryIndex);
+
+          const symbolEl=document.createElement('span');
+          symbolEl.className='boundary-symbol';
+          symbolEl.textContent=symbol;
+
+          const markEl=document.createElement('span');
+          const pending=pendingKeys && sameDisplayRef(pendingRef,ref);
+          markEl.className='mark boundary-mark'
+            + (pending ? ' pending-mark' : '')
+            + (sameDisplayRef(boundaryCursor,ref) && mode === 'NORMAL' && !gapMode ? ' mark-cursor' : '')
+            + (sameDisplayRef(arrowDraft,ref) ? ' arrow-source' : '');
+          markEl.textContent=pending ? pendingKeys : (boundary.slot.text || '');
+          markEl.dataset.boundaryWork=String(index);
+          markEl.dataset.boundaryIndex=String(boundaryIndex);
+          markEl.dataset.workSlot='single';
+          applySlotGeometry(markEl,ref);
+          markEl.style.left='50%';
+          item.style.minWidth=markEl.style.minWidth;
+
+          item.append(symbolEl,markEl);
+          item.addEventListener('click',(ev) => {
+            if(gapMode) return;
+            ev.stopPropagation();
+            boundaryCursor=cloneRef(ref);
+            gapTokenCursor=null;
+            groupSelection=null;
+            clearGroupCursor();
+            pendingKeys='';
+            pendingRef=null;
+            setMode('NORMAL');
+          });
+          gap.append(item);
+        });
         gap.addEventListener('click', (ev) => {
           if(!gapMode) return;
           ev.stopPropagation();
@@ -2201,10 +2313,7 @@
 
     updateInternalJson();
 
-    requestAnimationFrame(() => {
-      drawGroups();
-      drawArrows();
-    });
+    requestAnimationFrame(drawDisplayOverlays);
   }
 
   function groupRect(el){
@@ -2263,7 +2372,11 @@
   }
 
   function refHasActualIndividualWork(ref){
-    if(!ref || ref.group != null) return false;
+    if(!ref) return false;
+    if(ref.group != null){
+      const verbal=ensureGroupVerbal(groupById(ref.group));
+      return Boolean(verbal?.on && (ref.slot === 'left' || ref.slot === 'right'));
+    }
     const i=ref.word;
     if(i < 0 || i >= tokens.length) return false;
     const v=ensureVerbal(i);
@@ -2327,7 +2440,7 @@
     return el ? rectInWorkspace(el) : fallbackRect;
   }
 
-  function drawGroups(){
+  function drawGroups(forcedDownGroups=new Set()){
     groupLayer.innerHTML = '';
     groupLayer.style.width = `${Math.max(workspace.scrollWidth, workspace.clientWidth)}px`;
     groupLayer.style.height = `${Math.max(workspace.scrollHeight, workspace.clientHeight)}px`;
@@ -2369,7 +2482,7 @@
         }
       }
       for(const item of displayRects){
-        if(item.ref?.group != null || !segments.some(seg => refInsideSegment(item.ref,seg))) continue;
+        if(!segments.some(seg => refInsideSegment(item.ref,seg))) continue;
         if(refHasActualIndividualWork(item.ref)) bottoms.push(item.rect.bottom);
         if(isVisibleCursorElement(item.el)) cursorVisualBottoms.push(cursorVisualBottom(item.el));
         if(verbals[item.ref.word]?.on){
@@ -2386,7 +2499,8 @@
     for(const g of groups.slice().sort((a,b) =>
       (levels.get(a.id) || 0) - (levels.get(b.id) || 0) || a.id - b.id
     )){
-      const staticY=(intrinsicBottoms.get(g.id) || 0) + 1;
+      const staticY=(intrinsicBottoms.get(g.id) || 0) + 1
+        + (forcedDownGroups.has(g.id) ? groupLineStep : 0);
       const cursorY=(cursorBottoms.get(g.id) || 0) + 1;
       const sharedAbove=(displayLayouts.get(g.id)?.sharesWith || [])
         .map(id => underlineYByGroup.get(id))
@@ -2467,8 +2581,32 @@
             }
           }
 
+          const belongsToRow=item => {
+            const owner=item.el.closest('.word');
+            if(owner) return Math.abs(groupRect(owner).top-row.top)<5;
+            const anchorWord=sentence.querySelector(`.word[data-index="${item.extent.end}"]`);
+            return anchorWord && Math.abs(groupRect(anchorWord).top-row.top)<5;
+          };
+          const rowIntrinsicBottoms=[];
+          const rowCursorBottoms=[];
+          for(const item of containedSlotRects.filter(belongsToRow)){
+            if(refHasActualIndividualWork(item.ref)) rowIntrinsicBottoms.push(item.rect.bottom);
+            if(isVisibleCursorElement(item.el)) rowCursorBottoms.push(cursorVisualBottom(item.el));
+            if(item.ref.word != null && verbals[item.ref.word]?.on){
+              const verbalEl=sentence.querySelector(`.word[data-index="${item.ref.word}"] .verbal`);
+              if(verbalEl) rowIntrinsicBottoms.push(groupRect(verbalEl).bottom);
+            }
+          }
+          for(const item of row.rects){
+            const tokenEl=sentence.querySelector(`[data-token-index="${item.i}"]`);
+            if(tokenEl) rowIntrinsicBottoms.push(groupRect(tokenEl).bottom);
+          }
+
           // 同じ重なり群では、内側・短いgroupから27pxの固定ピッチで積む。
-          const y = commonUnderlineY;
+          // 複数行groupでは全体最下端との差だけ各行へ戻し、下線をその行の直下へ置く。
+          const globalBaseline=Math.max(intrinsicBottoms.get(g.id) || 0,cursorBottoms.get(g.id) || 0);
+          const rowBaseline=Math.max(...rowIntrinsicBottoms,...rowCursorBottoms);
+          const y = commonUnderlineY - Math.max(0,globalBaseline-rowBaseline);
 
           const line=document.createElement('div');
           line.className='group-underline'
@@ -2792,8 +2930,24 @@
 
   function appendBoundarySymbol(ch){
     const historyBefore = captureMarkState();
-    const i = currentBoundaryIndex();
-    applyEditorTransition(next => { next.gaps[i]=(next.gaps[i] || '') + ch; });
+    const i = Core.calculateNormalBoundaryIndex({
+      cursor:currentBoundaryIndex(),
+      tokenCount:tokens.length,
+      symbol:ch
+    });
+    const boundaryIndex=(gaps[i] || '').length;
+    applyEditorTransition(next => {
+      next.gaps[i]=(next.gaps[i] || '') + ch;
+      if(ch === '['){
+        if(!next.boundarySlots[i]) next.boundarySlots[i]=[];
+        next.boundarySlots[i][boundaryIndex]=makeWorkSlot();
+        next.boundaryCursor=boundaryRef(i,boundaryIndex);
+        next.gapTokenCursor=null;
+        next.groupCursorId=null;
+        next.groupCursorSlot=null;
+        next.groupCursorTarget=null;
+      }
+    });
     render();
     pushMarkUndo(historyBefore);
   }
@@ -2801,7 +2955,15 @@
   function backspaceBoundarySymbol(){
     const historyBefore = captureMarkState();
     const i = currentBoundaryIndex();
-    applyEditorTransition(next => { next.gaps[i]=(next.gaps[i] || '').slice(0, -1); });
+    applyEditorTransition(next => {
+      const removedIndex=(next.gaps[i] || '').length-1;
+      next.gaps[i]=(next.gaps[i] || '').slice(0, -1);
+      if(next.boundarySlots[i]) next.boundarySlots[i].splice(removedIndex,1);
+      const removed=ref => ref?.boundary === i && Number(ref.boundaryIndex || 0) === removedIndex;
+      next.arrows=next.arrows.filter(arrow => !removed(arrow.from) && !removed(arrow.to));
+      if(removed(next.arrowDraft)) next.arrowDraft=null;
+      if(removed(next.boundaryCursor)) next.boundaryCursor=null;
+    });
     render();
     pushMarkUndo(historyBefore);
   }
@@ -2809,7 +2971,13 @@
   function clearBoundarySymbol(){
     const historyBefore = captureMarkState();
     const i = currentBoundaryIndex();
-    applyEditorTransition(next => { next.gaps[i]=''; });
+    applyEditorTransition(next => {
+      next.gaps[i]='';
+      next.boundarySlots[i]=[];
+      next.arrows=next.arrows.filter(arrow => arrow.from?.boundary !== i && arrow.to?.boundary !== i);
+      if(next.arrowDraft?.boundary === i) next.arrowDraft=null;
+      if(next.boundaryCursor?.boundary === i) next.boundaryCursor=null;
+    });
     render();
     pushMarkUndo(historyBefore);
   }
@@ -2823,6 +2991,7 @@
       next.gapCursor=borderPositionIndex(positions,boundary,'after');
       next.gapMode=true;
       next.gapTokenCursor=null;
+      next.boundaryCursor=null;
       next.groupCursorId=null;
       next.groupCursorSlot=null;
       next.groupCursorTarget=null;
@@ -2856,6 +3025,7 @@
       next.groupCursorTarget=null;
       next.gapMode=false;
       next.gapTokenCursor=null;
+      next.boundaryCursor=null;
     });
     if(target){
       rememberHorizontalColumn(target);
@@ -2882,6 +3052,11 @@
     applyEditorTransition(next => {
       const position=Core.calculateBorderPositions(next.tokens.length,next.gapTokens)[next.gapCursor];
       next.gaps[position.gap]=(next.gaps[position.gap] || '') + ch;
+      if(ch === '['){
+        const index=next.gaps[position.gap].length-1;
+        if(!next.boundarySlots[position.gap]) next.boundarySlots[position.gap]=[];
+        next.boundarySlots[position.gap][index]=makeWorkSlot();
+      }
     });
     render();
     pushMarkUndo(historyBefore);
@@ -2902,12 +3077,15 @@
     applyEditorTransition(next => {
       const position=Core.calculateBorderPositions(next.tokens.length,next.gapTokens)[next.gapCursor];
       next.gaps[position.gap]='';
+      next.boundarySlots[position.gap]=[];
+      next.arrows=next.arrows.filter(arrow => arrow.from?.boundary !== position.gap && arrow.to?.boundary !== position.gap);
     });
     render();
     pushMarkUndo(historyBefore);
   }
 
   function currentDisplayRef(){
+    if(boundaryCursor != null && boundaryAtRef(boundaryCursor)) return cloneRef(boundaryCursor);
     if(gapTokenCursor != null && pseudoAtRef(gapTokenCursor)) return cloneRef(gapTokenCursor);
     if(tokens.length === 0 || cursor >= tokens.length) return null;
     if(groupCursorId !== null){
@@ -2925,6 +3103,11 @@
 
   function sameDisplayRef(a, b){
     if(!a || !b) return false;
+    if(a.boundary != null || b.boundary != null){
+      return a.boundary != null && b.boundary != null
+        && a.boundary === b.boundary
+        && Number(a.boundaryIndex || 0) === Number(b.boundaryIndex || 0);
+    }
     if(a.gapToken != null || b.gapToken != null){
       return a.gapToken != null && b.gapToken != null
         && a.gapToken === b.gapToken
@@ -2940,12 +3123,14 @@
 
   function displayKey(ref){
     if(ref?.group != null) return `group:${ref.group}:${ref.slot || 'single'}`;
+    if(ref?.boundary != null) return `boundary:${ref.boundary}:${Number(ref.boundaryIndex || 0)}:single`;
     if(ref?.gapToken != null) return `gap-token:${ref.gapToken}:${Number(ref.gapTokenIndex || 0)}:single`;
     return `${ref.word}:${ref.slot || 'single'}`;
   }
 
   function getDisplayValue(ref){
     if(!ref) return '';
+    if(ref.boundary != null) return boundaryAtRef(ref)?.slot?.text || '';
     if(ref.gapToken != null) return pseudoAtRef(ref)?.slot?.text || '';
     if(ref.group != null){
       const g = groupById(ref.group);
@@ -2976,6 +3161,7 @@
 
   function isValidDisplayRef(ref){
     if(!ref) return false;
+    if(ref.boundary != null) return Boolean(boundaryAtRef(ref)?.slot?.enabled);
     if(ref.gapToken != null) return Boolean(pseudoAtRef(ref)?.slot?.enabled);
     if(ref.group != null){
       const g = groupById(ref.group);
@@ -3000,8 +3186,8 @@
 
   function beginArrow(){
     const ref = currentDisplayRef();
-    if(!ref || !['ad','a','副詞的目的格'].includes(getDisplayValue(ref))){
-      modeBadge.textContent = 'ARROW: source must be a / ad / 副詞的目的格';
+    if(!ref || !Core.isArrowSourceRef(readEditorState(),ref)){
+      modeBadge.textContent = 'ARROW: source must be < / a / ad / 副詞的目的格 / 同格';
       modeBadge.classList.add('pending');
       return;
     }
@@ -3074,6 +3260,7 @@
 
   function storedSlotText(ref){
     if(!ref) return '';
+    if(ref.boundary != null) return boundaryAtRef(ref)?.slot?.text || '';
     if(ref.gapToken != null) return pseudoAtRef(ref)?.slot?.text || '';
     if(ref.group != null){
       const g = groupById(ref.group);
@@ -3095,6 +3282,8 @@
     if(!resolvedLayout){
       if(ref.group != null){
         resolvedLayout=ensureGroupVerbal(groupById(ref.group))?.on ? 't-pair' : 'single';
+      }else if(ref.boundary != null){
+        resolvedLayout='single';
       }else if(verbals[ref.word]?.on){
         resolvedLayout='t-pair';
       }else if(ensureWorkSlot(ref.word)?.kind === 'double'){
@@ -3136,6 +3325,9 @@
 
   function getDisplayElement(ref){
     if(!ref) return null;
+    if(ref.boundary != null){
+      return sentence.querySelector(`[data-boundary-work="${ref.boundary}"][data-boundary-index="${Number(ref.boundaryIndex || 0)}"]`);
+    }
     if(ref.gapToken != null){
       const index=Number(ref.gapTokenIndex || 0);
       return sentence.querySelector(`[data-gap-token-work="${ref.gapToken}"][data-gap-token-index="${index}"]`)
@@ -3167,7 +3359,7 @@
   }
 
   function getRows(){
-    const wordEls = [...sentence.querySelectorAll('.word')];
+    const wordEls = [...sentence.querySelectorAll('.word, .boundary-slot-item')];
     const rows = [];
     for(const el of wordEls){
       const r = rectInWorkspace(el);
@@ -3178,7 +3370,7 @@
       }
       row.top = Math.min(row.top, r.top);
       row.bottom = Math.max(row.bottom, r.bottom);
-      row.words.push(Number(el.dataset.index));
+      if(el.dataset.index != null) row.words.push(Number(el.dataset.index));
     }
     rows.sort((a,b) => a.top - b.top);
     return rows;
@@ -3189,8 +3381,8 @@
   }
 
   function rowIndexForDisplayRef(rows,ref,element){
-    if(ref?.gapToken == null) return rowIndexForWord(rows,refWord(ref));
-    const wordElement=element?.closest('.word') || element;
+    if(ref?.boundary == null && ref?.gapToken == null) return rowIndexForWord(rows,refWord(ref));
+    const wordElement=element?.closest('.word, .boundary-slot-item') || element;
     if(!wordElement) return -1;
     const rect=rectInWorkspace(wordElement);
     return rows.findIndex(row => Math.abs(row.top-rect.top) < 5);
@@ -3198,12 +3390,11 @@
 
   function flattenedDisplayOrder(){
     const list = [];
-    for(const item of tokenSequence()){
-      if(item.kind === 'pseudo-token'){
-        list.push(tokenSequenceItemRef(item));
-        continue;
-      }
-      const i=item.index;
+    for(let gap=0;gap<=tokens.length;gap++){
+      list.push(...boundaryRefsAt(gap));
+      for(const ref of pseudoRefsAt(gap)) list.push(ref);
+      if(gap === tokens.length) continue;
+      const i=gap;
       if(verbals[i]?.on || slotIsDouble(i)){
         list.push({word:i, slot:'left'}, {word:i, slot:'right'});
       }else{
@@ -3261,16 +3452,41 @@
     const spanRows = Math.abs(rb - ra);
     const rankSpan = spanRows * 100000 + spanX;
     const horizontals = [];
+    const baseGap = 16;
+    const toContainingIds=new Set(groupsContainingRef(to).map(group => group.id));
+    const internalGroupIds=groupsContainingRef(from)
+      .map(group => group.id)
+      .filter(groupId => toContainingIds.has(groupId));
 
     if(sameRow){
-      horizontals.push({row:ra, x1:Math.min(a.cx, b.cx), x2:Math.max(a.cx, b.cx)});
+      horizontals.push({
+        row:ra,
+        x1:Math.min(a.cx, b.cx),
+        x2:Math.max(a.cx, b.cx),
+        y:Math.max(a.bottom, b.bottom) + baseGap
+      });
     }else{
-      horizontals.push({row:ra, x1:Math.min(a.cx, exitEdge), x2:Math.max(a.cx, exitEdge)});
+      horizontals.push({
+        row:ra,
+        x1:Math.min(a.cx, exitEdge),
+        x2:Math.max(a.cx, exitEdge),
+        y:rows[ra].bottom + baseGap
+      });
       const step = rb > ra ? 1 : -1;
       for(let r = ra + step; r !== rb; r += step){
-        horizontals.push({row:r, x1:Math.min(leftEdge, rightEdge), x2:Math.max(leftEdge, rightEdge)});
+        horizontals.push({
+          row:r,
+          x1:Math.min(leftEdge, rightEdge),
+          x2:Math.max(leftEdge, rightEdge),
+          y:rows[r].bottom + baseGap
+        });
       }
-      horizontals.push({row:rb, x1:Math.min(enterEdge, b.cx), x2:Math.max(enterEdge, b.cx)});
+      horizontals.push({
+        row:rb,
+        x1:Math.min(enterEdge, b.cx),
+        x2:Math.max(enterEdge, b.cx),
+        y:rows[rb].bottom + baseGap
+      });
     }
 
     return {
@@ -3278,6 +3494,7 @@
       targetAtTop:arrowTargetUsesTop(to),
       leftEdge, rightEdge, exitEdge, enterEdge, sameRow,
       spanX, spanRows, rankSpan, horizontals,
+      internalGroupIds,
       ax:a.cx, bx:b.cx, fromSide:null, toSide:null
     };
   }
@@ -3286,20 +3503,61 @@
     return !(a.x2 < b.x1 || b.x2 < a.x1);
   }
 
-  function arrowLayoutsConflict(layoutA, layoutB){
+  function arrowLayoutsConflict(layoutA, layoutB, levelA=0, levelB=0){
+    const laneStep = 12;
     return layoutA.horizontals.some(segA =>
-      layoutB.horizontals.some(segB => segA.row === segB.row && horizontalSegmentsOverlap(segA, segB))
+      layoutB.horizontals.some(segB =>
+        segA.row === segB.row
+        && horizontalSegmentsOverlap(segA, segB)
+        && Math.abs(
+          (segA.y + levelA * laneStep) - (segB.y + levelB * laneStep)
+        ) < 4
+      )
     );
   }
 
-  function assignArrowLevels(layouts){
+  function arrowUnderlineObstacles(){
+    return [...groupLayer.querySelectorAll('.group-underline[data-group-underline]')]
+      .map(line => {
+        const group=Number(line.dataset.groupUnderline);
+        const lineRect=rectInWorkspace(line);
+        const slots=[...groupLayer.querySelectorAll(`[data-group-work="${group}"]`)]
+          .filter(el => getComputedStyle(el).visibility !== 'hidden')
+          .map(rectInWorkspace);
+        return {
+          group,
+          x1:lineRect.left,
+          x2:lineRect.right,
+          top:lineRect.top-2,
+          bottom:Math.max(lineRect.top+2,...slots.map(rect => rect.bottom+2))
+        };
+      });
+  }
+
+  function arrowLevelHitsUnderline(layout,level,obstacles){
+    const laneStep=12;
+    return layout.horizontals.some(segment => {
+      const y=segment.y+level*laneStep;
+      return obstacles.some(obstacle =>
+        !layout.internalGroupIds?.includes(obstacle.group)
+        && horizontalSegmentsOverlap(segment,obstacle)
+        && y >= obstacle.top
+        && y <= obstacle.bottom
+      );
+    });
+  }
+
+  function assignArrowLevels(layouts,obstacles=[]){
     const sorted = layouts.slice().sort((a,b) =>
       a.rankSpan - b.rankSpan || a.ra - b.ra || a.ia - b.ia
     );
     const placed = [];
     for(const layout of sorted){
       let level = 0;
-      while(placed.some(other => other.level === level && arrowLayoutsConflict(layout, other))) level++;
+      while(
+        arrowLevelHitsUnderline(layout,level,obstacles)
+        || placed.some(other => arrowLayoutsConflict(layout, other, level, other.level || 0))
+      ) level++;
       layout.level = level;
       placed.push(layout);
     }
@@ -3432,6 +3690,134 @@
     );
   }
 
+  function arrowLayoutsForRendering(){
+    const layouts = arrows.map(arrow => makeArrowLayout(arrow.from, arrow.to)).filter(Boolean);
+    const obstacles=arrowUnderlineObstacles();
+    assignArrowLevels(layouts,obstacles);
+
+    let previewLayout = null;
+    if(arrowDraft){
+      const to = currentDisplayRef();
+      if(to && !sameDisplayRef(arrowDraft, to) && sameSentenceRefs(arrowDraft, to)){
+        previewLayout = makeArrowLayout(arrowDraft, to);
+        if(previewLayout){
+          let level = 0;
+          while(
+            arrowLevelHitsUnderline(previewLayout,level,obstacles)
+            || layouts.some(other => arrowLayoutsConflict(previewLayout, other, level, other.level || 0))
+          ) level++;
+          previewLayout.level = level;
+        }
+      }
+    }
+
+    const visibleLayouts = previewLayout ? [...layouts, previewLayout] : layouts.slice();
+    assignEndpointOffsets(visibleLayouts);
+    return {layouts, previewLayout, visibleLayouts};
+  }
+
+  function arrowLayoutSegments(layout){
+    const {rows, ra, rb, exitEdge, enterEdge, sameRow} = layout;
+    const aBottom = layout.a.bottom + 1;
+    const bEndpointY = layout.targetAtTop ? layout.b.top - 1 : layout.b.bottom + 1;
+    const ax = layout.ax ?? layout.a.cx;
+    const bx = layout.bx ?? layout.b.cx;
+    const gap = 16 + (layout.level || 0) * 12;
+
+    if(sameRow){
+      const laneY = Math.max(layout.a.bottom, layout.b.bottom) + gap;
+      return [
+        {x1:ax, y1:aBottom, x2:ax, y2:laneY},
+        {x1:ax, y1:laneY, x2:bx, y2:laneY},
+        {x1:bx, y1:laneY, x2:bx, y2:bEndpointY}
+      ];
+    }
+
+    const segments = [];
+    const step = rb > ra ? 1 : -1;
+    const firstLane = rows[ra].bottom + gap;
+    segments.push(
+      {x1:ax, y1:aBottom, x2:ax, y2:firstLane},
+      {x1:ax, y1:firstLane, x2:exitEdge, y2:firstLane}
+    );
+    for(let r = ra + step; r !== rb; r += step){
+      const lane = rows[r].bottom + gap;
+      segments.push({x1:enterEdge, y1:lane, x2:exitEdge, y2:lane});
+    }
+    const lastLane = rows[rb].bottom + gap;
+    segments.push(
+      {x1:enterEdge, y1:lastLane, x2:bx, y2:lastLane},
+      {x1:bx, y1:lastLane, x2:bx, y2:bEndpointY}
+    );
+    return segments;
+  }
+
+  function segmentIntersectsRect(segment, rect){
+    const minX = Math.min(segment.x1, segment.x2);
+    const maxX = Math.max(segment.x1, segment.x2);
+    const minY = Math.min(segment.y1, segment.y2);
+    const maxY = Math.max(segment.y1, segment.y2);
+    if(Math.abs(segment.x1 - segment.x2) < 0.1){
+      return segment.x1 >= rect.left && segment.x1 <= rect.right
+        && maxY > rect.top && minY < rect.bottom;
+    }
+    return segment.y1 >= rect.top && segment.y1 <= rect.bottom
+      && maxX > rect.left && minX < rect.right;
+  }
+
+  function textCollisionRect(el,padding=1){
+    if(!el?.textContent?.trim()) return null;
+    const range=document.createRange();
+    range.selectNodeContents(el);
+    const measured=rectInWorkspace(range);
+    range.detach?.();
+    if(measured.width <= 0 || measured.height <= 0) return null;
+    return {
+      left:measured.left-padding,
+      right:measured.right+padding,
+      top:measured.top-padding,
+      bottom:measured.bottom+padding
+    };
+  }
+
+  function arrowCrossedGroupIds(){
+    const {visibleLayouts} = arrowLayoutsForRendering();
+    if(!visibleLayouts.length) return new Set();
+
+    const slots = [...groupLayer.querySelectorAll(
+      '.group-mark[data-group-work], .group-verbal-left[data-group-work], .group-verbal-right[data-group-work]'
+    )]
+      .filter(el => el.textContent.trim() && getComputedStyle(el).visibility !== 'hidden')
+      .map(el => ({
+        group:Number(el.dataset.groupWork),
+        ref:{
+          group:Number(el.dataset.groupWork),
+          slot:el.dataset.groupSlot === 'single' ? null : el.dataset.groupSlot
+        },
+        rect:textCollisionRect(el)
+      }))
+      .filter(slot => slot.rect);
+
+    const crossed = new Set();
+    for(const layout of visibleLayouts){
+      const segments = arrowLayoutSegments(layout);
+      for(const slot of slots){
+        if(sameDisplayRef(slot.ref, layout.from) || sameDisplayRef(slot.ref, layout.to)) continue;
+        if(segments.some(segment => segmentIntersectsRect(segment, slot.rect))){
+          crossed.add(slot.group);
+        }
+      }
+    }
+    return crossed;
+  }
+
+  function drawDisplayOverlays(){
+    drawGroups();
+    const pushedGroups = arrowCrossedGroupIds();
+    if(pushedGroups.size) drawGroups(pushedGroups);
+    drawArrows();
+  }
+
   function drawArrows(){
     cleanupArrows();
     arrowLayer.innerHTML = '';
@@ -3465,24 +3851,7 @@
     defs.append(marker, previewMarker);
     arrowLayer.appendChild(defs);
 
-    const layouts = arrows.map(arrow => makeArrowLayout(arrow.from, arrow.to)).filter(Boolean);
-    assignArrowLevels(layouts);
-
-    let previewLayout = null;
-    if(arrowDraft){
-      const to = currentDisplayRef();
-      if(to && !sameDisplayRef(arrowDraft, to) && sameSentenceRefs(arrowDraft, to)){
-        previewLayout = makeArrowLayout(arrowDraft, to);
-        if(previewLayout){
-          let level = 0;
-          while(layouts.some(other => other.level === level && arrowLayoutsConflict(previewLayout, other))) level++;
-          previewLayout.level = level;
-        }
-      }
-    }
-
-    const visibleLayouts = previewLayout ? [...layouts, previewLayout] : layouts.slice();
-    assignEndpointOffsets(visibleLayouts);
+    const {layouts, previewLayout} = arrowLayoutsForRendering();
 
     for(const layout of layouts) drawArrowLayout(layout, false);
     if(previewLayout) drawArrowLayout(previewLayout, true);
@@ -3512,8 +3881,19 @@
   }
 
   function setMark(mark){
-    if(gapTokenCursor == null && (tokens.length === 0 || cursor >= tokens.length)) return;
+    if(boundaryCursor == null && gapTokenCursor == null && (tokens.length === 0 || cursor >= tokens.length)) return;
     const historyBefore = captureMarkState();
+    if(boundaryCursor != null){
+      const selected=cloneRef(boundaryCursor);
+      applyEditorTransition(next => {
+        const boundary=boundaryAtRef(selected,next.boundarySlots,next.gaps);
+        if(boundary?.slot) boundary.slot.text=mark;
+      });
+      cleanupArrows();
+      render();
+      pushMarkUndo(historyBefore);
+      return;
+    }
     if(gapTokenCursor != null){
       const selected=cloneRef(gapTokenCursor);
       applyEditorTransition(next => {
@@ -3968,6 +4348,9 @@
   }
 
   function horizontalCurrentTarget(){
+    if(boundaryCursor != null && boundaryAtRef(boundaryCursor)){
+      return {kind:'boundary',...cloneRef(boundaryCursor),paired:false};
+    }
     if(gapTokenCursor != null && pseudoAtRef(gapTokenCursor)){
       return {kind:'gap-token',...cloneRef(gapTokenCursor),paired:false};
     }
@@ -3988,14 +4371,41 @@
     return {kind:'word', word:cursor, slot:cursorSlot, paired};
   }
 
-  function horizontalNeighborTarget(index, side){
+  function visibleWordTarget(index,preferred){
+    if(index < 0 || index >= tokens.length || wordDisplayDisabledByGroupT(index)) return null;
+    const paired=Boolean(verbals[index]?.on || slotIsDouble(index));
+    const slot=paired ? (preferred === 'right' ? 'right' : 'left') : null;
+    const wordTarget={kind:'word',word:index,slot,paired};
+    if(!refHasActualIndividualWork({word:index,slot})) return null;
+    const wordEl=getDisplayElement({word:index,slot});
+    if(!wordEl || getComputedStyle(wordEl).visibility === 'hidden') return null;
+    return wordTarget;
+  }
+
+  function sameHeightVisibleWordTarget(index,preferred,currentRef){
+    if(!currentRef) return null;
+    const wordTarget=visibleWordTarget(index,preferred);
+    if(!wordTarget) return null;
+    const currentEl=getDisplayElement(currentRef);
+    const wordEl=getDisplayElement({word:index,slot:wordTarget.slot});
+    if(!currentEl) return null;
+    const currentTop=rectInWorkspace(currentEl).top;
+    const wordTop=rectInWorkspace(wordEl).top;
+    return Math.abs(currentTop-wordTop) < 5 ? wordTarget : null;
+  }
+
+  function horizontalNeighborTarget(index, side, currentRef=null){
     if(index < 0 || index > tokens.length) return null;
     if(index === tokens.length) return horizontalEntryTarget(index, null);
     const preferred=side === 'left' ? firstSlotOf(index) : lastSlotOf(index);
-    return horizontalEntryTarget(index, preferred);
+    return sameHeightVisibleWordTarget(index,preferred,currentRef)
+      || horizontalEntryTarget(index, preferred);
   }
 
   function horizontalTargetFromRef(ref){
+    if(ref?.boundary != null){
+      return {kind:'boundary',...cloneRef(ref),paired:false};
+    }
     if(ref?.gapToken != null){
       return {kind:'gap-token',...cloneRef(ref),paired:false};
     }
@@ -4047,6 +4457,12 @@
     const current=horizontalCurrentTarget();
     if(!current) return null;
 
+    if(current.kind === 'boundary'){
+      const order=flattenedDisplayOrder();
+      const index=order.findIndex(ref => sameDisplayRef(ref,current));
+      return horizontalTargetFromRef(order[index+(direction === 'left' ? -1 : 1)]);
+    }
+
     if(current.kind === 'gap-token'){
       const adjacent=tokenSequenceNeighborItem(current,direction);
       return horizontalTargetFromSequenceItem(adjacent,direction);
@@ -4071,8 +4487,24 @@
         (direction === 'right' && current.slot === 'left')
         || (direction === 'left' && current.slot === 'right')
       );
+      const boundaryCandidates=!movingInsidePair
+        ? boundaryRefsAt(direction === 'left' ? current.word : current.word+1)
+        : [];
+      if(boundaryCandidates.length){
+        return horizontalTargetFromRef(direction === 'left' ? boundaryCandidates.at(-1) : boundaryCandidates[0]);
+      }
       if(!movingInsidePair && adjacent?.kind === 'pseudo-token'){
         return horizontalTargetFromSequenceItem(adjacent,direction);
+      }
+      if(!movingInsidePair && adjacent?.kind === 'token'){
+        const preferred=direction === 'left' ? lastSlotOf(adjacent.index) : firstSlotOf(adjacent.index);
+        const crossesSentence=sentenceOfRef(currentRef) !== sentenceOfRef({word:adjacent.index,slot:preferred});
+        if(crossesSentence){
+          const visibleBoundarySlot=visibleWordTarget(adjacent.index,preferred);
+          if(visibleBoundarySlot) return visibleBoundarySlot;
+        }
+        const sameHeight=sameHeightVisibleWordTarget(adjacent.index,preferred,currentRef);
+        if(sameHeight) return sameHeight;
       }
     }else if(current.kind === 'group'){
       const group=groupById(current.group);
@@ -4155,13 +4587,14 @@
     return Core.calculateHorizontalTarget({
       direction,
       current,
-      previous:horizontalNeighborTarget(leftIndex, 'right'),
-      next:horizontalNeighborTarget(rightIndex, 'left')
+      previous:horizontalNeighborTarget(leftIndex, 'right', currentRef),
+      next:horizontalNeighborTarget(rightIndex, 'left', currentRef)
     });
   }
 
   function horizontalTargetRef(target){
     if(!target || target.kind === 'dummy') return null;
+    if(target.kind === 'boundary') return boundaryRef(target.boundary,target.boundaryIndex);
     if(target.kind === 'gap-token') return pseudoRef(target.gapToken,target.gapTokenIndex);
     return target.kind === 'group'
       ? {group:target.group, slot:target.slot}
@@ -4175,10 +4608,22 @@
 
   function selectHorizontalTarget(target){
     if(!target) return false;
+    if(target.kind === 'boundary'){
+      const ref=boundaryRef(target.boundary,target.boundaryIndex);
+      if(!boundaryAtRef(ref)) return false;
+      boundaryCursor=ref;
+      gapTokenCursor=null;
+      clearGroupCursor();
+      render();
+      sentence.querySelector(`[data-boundary-gap="${target.boundary}"][data-boundary-index="${Number(target.boundaryIndex || 0)}"]`)
+        ?.scrollIntoView({block:'nearest',inline:'nearest'});
+      return true;
+    }
     if(target.kind === 'gap-token'){
       const ref=pseudoRef(target.gapToken,target.gapTokenIndex);
       if(!pseudoAtRef(ref)) return false;
       gapTokenCursor=ref;
+      boundaryCursor=null;
       clearGroupCursor();
       render();
       sentence.querySelector(`[data-gap-token="${target.gapToken}"][data-gap-token-index="${Number(target.gapTokenIndex || 0)}"]`)
@@ -4204,6 +4649,7 @@
     if(tokens.length === 0) return;
 
     gapTokenCursor=null;
+    boundaryCursor=null;
     cursor = Math.max(0, Math.min(tokens.length, index));
     clearGroupCursor();
 
@@ -4527,7 +4973,10 @@
 
   function commitPending(){
     const historyBefore = captureMarkState();
-    if(pendingKeys && pendingRef?.gapToken != null){
+    if(pendingKeys && pendingRef?.boundary != null){
+      const boundary=boundaryAtRef(pendingRef);
+      if(boundary?.slot) boundary.slot.text=pendingKeys;
+    }else if(pendingKeys && pendingRef?.gapToken != null){
       const pseudo=pseudoAtRef(pendingRef);
       if(pseudo?.slot) pseudo.slot.text=pendingKeys;
     }else if(pendingKeys && pendingRef?.group != null){
@@ -4564,7 +5013,10 @@
 
   function assignPendingMark(value){
     const historyBefore = captureMarkState();
-    if(pendingRef?.gapToken != null){
+    if(pendingRef?.boundary != null){
+      const boundary=boundaryAtRef(pendingRef);
+      if(boundary?.slot) boundary.slot.text=value;
+    }else if(pendingRef?.gapToken != null){
       const pseudo=pseudoAtRef(pendingRef);
       if(pseudo?.slot) pseudo.slot.text=value;
     }else if(pendingRef?.group != null){
@@ -4606,6 +5058,7 @@
 
   function handleMarkSequence(key){
     if(!pendingKeys
+      && boundaryCursor === null
       && gapTokenCursor === null
       && groupCursorId === null
       && cursor < tokens.length
@@ -4675,6 +5128,10 @@
       if(key === 'u'){
         pendingKeys = 'au';
         render();
+        return true;
+      }
+      if(key === 'p' || key === 'P'){
+        assignPendingMark('同格');
         return true;
       }
       // 別の入力が来たら、a を形容詞として確定してから、その入力を処理する。
@@ -5098,8 +5555,8 @@
     workspace.focus();
   });
 
-  window.addEventListener('resize', () => requestAnimationFrame(() => { drawGroups(); drawArrows(); }));
-  workspace.addEventListener('scroll', () => requestAnimationFrame(() => { drawGroups(); drawArrows(); }));
+  window.addEventListener('resize', () => requestAnimationFrame(drawDisplayOverlays));
+  workspace.addEventListener('scroll', () => requestAnimationFrame(drawDisplayOverlays));
 
   window.KiriEditorData=Object.freeze({
     getInnerJson:innerJsonRepresentation,
