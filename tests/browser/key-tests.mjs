@@ -148,6 +148,157 @@ async function firstTokenText(page) {
   return doc.sentences[0].tokens[0].slot.text || '';
 }
 
+test('the typed sentence model is available through the editor data API', async ({ page }) => {
+  const result=await page.evaluate(() => {
+    const model=window.KiriEditorData.model;
+    const state=model.createSentenceState({
+      tokens:{
+        10:{
+          id:10,
+          word_slot:{
+            kind:'word_slot',
+            slot:{
+              id:100,
+              kind:'double_slot',
+              lslot:{id:101,kind:'atomic_slot',mark:'s'},
+              rslot:{id:102,kind:'atomic_slot',mark:'v'}
+            }
+          }
+        },
+        20:{
+          id:20,
+          word_slot:{
+            kind:'word_slot',
+            slot:{id:200,kind:'atomic_slot',mark:'a'}
+          }
+        }
+      },
+      token_chain:[10,20],
+      underline_groups:[{
+        kind:'underline_group',
+        child_ids:[100,200],
+        slot:{
+          id:300,
+          kind:'t_slot',
+          pre_slot:{id:301,kind:'atomic_slot',mark:'-3'},
+          post_slot:{id:302,kind:'atomic_slot',mark:'ad'}
+        }
+      }],
+      cursor:102
+    });
+    const validation=model.validateSentenceState(state);
+    state.token_chain.reverse();
+    return {
+      marks:model.MARKS,
+      tokenChain:state.token_chain,
+      validatedTokenIds:validation.token_ids,
+      validatedSlotIds:validation.slot_ids
+    };
+  });
+  assert.deepEqual(result.marks,[
+    's','v','o','c','con','pre','ap','a','ad','1','2','3','4','5','-3','-4','-5'
+  ]);
+  assert.deepEqual(result.tokenChain,[20,10]);
+  assert.deepEqual(result.validatedTokenIds,[10,20]);
+  assert.deepEqual(result.validatedSlotIds,[100,101,102,200,300,301,302]);
+});
+
+test('the typed sentence model rejects broken ID references', async ({ page }) => {
+  const messages=await page.evaluate(() => {
+    const model=window.KiriEditorData.model;
+    const base={
+      tokens:{
+        1:{id:1,word_slot:{kind:'word_slot',slot:{id:10,kind:'atomic_slot',mark:'s'}}}
+      },
+      token_chain:[1],
+      underline_groups:[],
+      cursor:10
+    };
+    const capture=state => {
+      try{
+        model.validateSentenceState(state);
+        return '';
+      }catch(error){
+        return error.message;
+      }
+    };
+    return [
+      capture({...base,token_chain:[2]}),
+      capture({...base,cursor:99}),
+      capture({...base,underline_groups:[{
+        kind:'underline_group',
+        child_ids:[99],
+        slot:{id:20,kind:'atomic_slot',mark:'v'}
+      }]})
+    ];
+  });
+  assert.match(messages[0],/unknown TokenId 2/);
+  assert.match(messages[1],/unknown SlotId 99/);
+  assert.match(messages[2],/unknown SlotId 99/);
+});
+
+test('the typed sentence model accepts an arbitrary string mark', async ({ page }) => {
+  const result=await page.evaluate(() => {
+    const model=window.KiriEditorData.model;
+    const state={
+      tokens:{
+        1:{
+          id:1,
+          word_slot:{kind:'word_slot',slot:{id:10,kind:'atomic_slot',mark:'任意標識'}}
+        }
+      },
+      token_chain:[1],
+      underline_groups:[],
+      cursor:10
+    };
+    return model.validateSentenceState(state);
+  });
+  assert.deepEqual(result,{slot_ids:[10],token_ids:[1]});
+});
+
+test('the typed sentence model keeps T pre_slot atomic and rejects double replacement', async ({ page }) => {
+  const result=await page.evaluate(() => {
+    const model=window.KiriEditorData.model;
+    const original={
+      tokens:{
+        1:{id:1,word_slot:{kind:'word_slot',slot:{id:10,kind:'atomic_slot',mark:'s'}}}
+      },
+      token_chain:[1],
+      underline_groups:[],
+      cursor:10
+    };
+    const replaced=model.replaceWordSlotWithT(original,1,{
+      id:20,
+      post_slot:{id:21,kind:'atomic_slot',mark:'ad'}
+    });
+    const restored=model.restoreWordSlotFromT(replaced,1);
+    const doubleState={
+      ...original,
+      tokens:{1:{id:1,word_slot:{kind:'word_slot',slot:{
+        id:30,
+        kind:'double_slot',
+        lslot:{id:31,kind:'atomic_slot',mark:'s'},
+        rslot:{id:32,kind:'atomic_slot',mark:'v'}
+      }}}},
+      cursor:31
+    };
+    let doubleError='';
+    try{
+      model.replaceWordSlotWithT(doubleState,1,{
+        id:40,
+        post_slot:{id:41,kind:'atomic_slot',mark:'ad'}
+      });
+    }catch(error){
+      doubleError=error.message;
+    }
+    return {original,replaced,restored,doubleError};
+  });
+  assert.equal(result.replaced.tokens[1].word_slot.slot.kind,'t_slot');
+  assert.deepEqual(result.replaced.tokens[1].word_slot.slot.pre_slot,result.original.tokens[1].word_slot.slot);
+  assert.deepEqual(result.restored,result.original);
+  assert.match(result.doubleError,/must contain an AtomicSlot/);
+});
+
 const markCases = [
   ['s sets S', ['s', 'Enter'], 'S'],
   ["s' sets S'", ['s', "'"], "S'"],
@@ -205,6 +356,91 @@ test('h/l/0/$ move the normal cursor', async ({ page }) => {
   assert.equal((await currentCursor(page)).word, 4);
   await press(page, '0');
   assert.equal((await currentCursor(page)).word, 0);
+});
+
+test('logical cursor uses display projection to move from X to Y in ABCD/X/Y/Z', async ({ page }) => {
+  const inner={version:1,text:'A B C D',sentences:[{
+    tokens:Array.from({length:4},() => ({slot:{kind:'single',text:''}})),
+    structures:[
+      {id:1,kind:'group',form:'underline',mark:'',members:[{token:0,port:'single'},{token:1,port:'single'}]},
+      {id:2,kind:'group',form:'underline',mark:'',members:[{token:2,port:'single'},{token:3,port:'single'}]},
+      {id:3,kind:'group',form:'underline',mark:'',members:[{structure:1,port:'single'},{structure:2,port:'single'}]}
+    ]
+  }]};
+  await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
+  await page.waitForTimeout(80);
+  await page.locator('[data-group-underline="1"]').first().click();
+  await page.waitForTimeout(50);
+
+  const before=await page.evaluate(() => window.KiriEditorData.getNavigationSnapshot());
+  assert.deepEqual(before.cursor,{x:0,y:2});
+  const row=(group) => before.cells.find(cell => cell.semanticRef.group === group);
+  assert.equal(row(1).logical_y,2);
+  assert.equal(row(1).display_y,1);
+  assert.equal(row(2).display_y,1);
+  assert.equal(row(3).logical_y,3);
+  assert.equal(row(3).display_y,3);
+
+  await press(page,'l');
+  const after=await page.evaluate(() => window.KiriEditorData.getNavigationSnapshot());
+  assert.deepEqual(after.cursor,{x:2,y:2});
+  assert.equal((await currentCursor(page)).group,'2');
+});
+
+test('double and T halves use x and x plus one half without renumbering following words', async ({ page }) => {
+  const simple={version:1,text:'a b',sentences:[{
+    tokens:[{slot:{kind:'single',text:''}},{slot:{kind:'single',text:''}}]
+  }]};
+  const positions=async () => page.evaluate(() => window.KiriEditorData.getNavigationSnapshot().cells
+    .filter(cell => cell.semanticRef.word != null)
+    .map(cell => ({word:cell.semanticRef.word,slot:cell.semanticRef.slot,x:cell.colIdx,y:cell.logical_y})));
+
+  await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),simple);
+  await page.waitForTimeout(50);
+  await press(page,'d');
+  assert.deepEqual(await positions(),[
+    {word:0,slot:'left',x:0,y:1},
+    {word:0,slot:'right',x:0.5,y:1},
+    {word:1,slot:null,x:1,y:1}
+  ]);
+
+  await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),simple);
+  await page.waitForTimeout(50);
+  await press(page,'t');
+  assert.deepEqual(await positions(),[
+    {word:0,slot:'left',x:0,y:1},
+    {word:0,slot:'right',x:0.5,y:1},
+    {word:1,slot:null,x:1,y:1}
+  ]);
+});
+
+test('logical x and y remain authoritative across redraw and stale legacy caches', async ({ page }) => {
+  await page.locator('.word[data-index="1"]').click();
+  await page.waitForTimeout(40);
+  const before=await page.evaluate(() => window.KiriEditorData.getNavigationSnapshot().cursor);
+  assert.deepEqual(before,{x:1,y:1});
+
+  await page.setViewportSize({width:900,height:700});
+  await page.evaluate(() => document.querySelector('#workspace').scrollTo({left:10,top:10}));
+  await page.waitForTimeout(80);
+  assert.deepEqual(
+    await page.evaluate(() => window.KiriEditorData.getNavigationSnapshot().cursor),
+    before
+  );
+
+  await page.evaluate(() => window.KiriEditorTesting.setLegacyCursorCache({
+    cursor:0,
+    cursorSlot:null,
+    groupCursorId:null,
+    groupCursorSlot:null,
+    groupCursorTarget:null
+  }));
+  await press(page,'l');
+  assert.equal((await currentCursor(page)).word,2);
+  assert.deepEqual(
+    await page.evaluate(() => window.KiriEditorData.getNavigationSnapshot().cursor),
+    {x:2,y:1}
+  );
 });
 
 test('i enters INSERT and Escape returns NORMAL', async ({ page }) => {
@@ -1152,6 +1388,67 @@ test('h and l leave a non-contiguous underline through its unselected gap', asyn
   await page.locator('.word[data-index="1"]').click();
   await press(page,'l');
   assert.equal((await currentCursor(page)).word,2);
+
+  await page.locator('.word[data-index="2"]').evaluate(el => el.click());
+  await press(page,'l');
+  const entered=await currentCursor(page);
+  assert.equal(entered.group,'1');
+  assert.equal(await page.locator('.group-underline-cursor').count(),1);
+  assert.equal(
+    await page.locator('.group-underline-cursor').getAttribute('data-group-segment'),
+    '1'
+  );
+});
+
+test('h and l leave the selected underline region after scanning all of its columns', async ({ page }) => {
+  const inner={version:1,text:'A B C D E',sentences:[{
+    tokens:Array.from({length:5},() => ({slot:{kind:'single',text:''}})),
+    structures:[{
+      id:1,
+      kind:'group',
+      members:[
+        {token:0,port:'single'},
+        {token:1,port:'single'},
+        {token:3,port:'single'},
+        {token:4,port:'single'}
+      ],
+      form:'underline',
+      mark:''
+    }]
+  }]};
+  await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
+  await page.waitForTimeout(50);
+
+  const segments=page.locator('.group-underline[data-group-underline="1"]');
+  assert.equal(await segments.count(),2);
+  await segments.nth(0).evaluate((el) => {
+    const rect=el.getBoundingClientRect();
+    el.dispatchEvent(new MouseEvent('click',{
+      bubbles:true,
+      clientX:rect.left+2,
+      clientY:(rect.top+rect.bottom)/2
+    }));
+  });
+  assert.equal(await page.locator('.group-underline-cursor').count(),1);
+  await press(page,'l');
+  let cursor=await currentCursor(page);
+  assert.equal(cursor.word,2);
+  assert.equal(cursor.group,null);
+
+  await page.waitForTimeout(50);
+  await segments.nth(1).evaluate((el) => {
+    const rect=el.getBoundingClientRect();
+    el.dispatchEvent(new MouseEvent('click',{
+      bubbles:true,
+      clientX:rect.right-2,
+      clientY:(rect.top+rect.bottom)/2
+    }));
+  });
+  assert.equal(await page.locator('.group-underline-cursor').count(),1);
+  await press(page,'h');
+  cursor=await currentCursor(page);
+  assert.equal(cursor.word,2);
+  assert.equal(cursor.group,null);
 });
 
 test('l reaches President through adjacent child and parent underlines', async ({ page }) => {
@@ -1327,7 +1624,7 @@ test('j moves to the next line and k to the previous line when no structural slo
   await page.locator('#workspace').click();
   await page.waitForFunction(() => document.querySelectorAll('.word:not([data-dummy])').length === 4);
 
-  await page.locator('.word[data-index="0"]').click();
+  await page.locator('.word[data-index="0"]').evaluate(el => el.click());
   await press(page,'j');
   assert.equal((await currentCursor(page)).word,2);
 
@@ -1339,6 +1636,89 @@ test('j moves to the next line and k to the previous line when no structural slo
   assert.equal((await currentCursor(page)).word,3);
   await press(page,'k');
   assert.equal((await currentCursor(page)).word,1);
+});
+
+test('sentence processing isolates layout navigation groups and arrows', async ({ page }) => {
+  const inner={version:1,text:'a b\nc d',sentences:[
+    {
+      tokens:[{slot:{kind:'single',text:'a'}},{slot:{kind:'single',text:''}}],
+      structures:[{id:1,kind:'group',members:[{token:0,port:'single'},{token:1,port:'single'}],form:'underline',mark:''}],
+      arrows:[{from:{token:0,port:'single'},to:{token:1,port:'single'}}]
+    },
+    {
+      tokens:[{slot:{kind:'single',text:'a'}},{slot:{kind:'single',text:''}}],
+      structures:[{id:2,kind:'group',members:[{token:0,port:'single'},{token:1,port:'single'}],form:'underline',mark:''}],
+      arrows:[{from:{token:0,port:'single'},to:{token:1,port:'single'}}]
+    }
+  ]};
+  await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
+  await page.waitForTimeout(50);
+
+  await page.locator('.word[data-index="2"]').evaluate(el => el.click());
+  await page.waitForTimeout(30);
+  let result=await page.evaluate(() => ({
+    processing:window.KiriEditorData.getSentenceProcessingSnapshot(),
+    navigation:window.KiriEditorData.getNavigationSnapshot(),
+    display:window.KiriEditorData.getDisplayJson()
+  }));
+  assert.equal(result.processing.sentenceCount,2);
+  assert.deepEqual(result.processing.sentences.map(item => item.groupIds),[[1],[2]]);
+  assert.deepEqual(result.processing.sentences.map(item => item.arrowCount),[1,1]);
+  assert.equal(result.processing.activeSentenceIndex,1);
+  assert.equal(result.navigation.sentenceIndex,1);
+  assert.deepEqual(
+    result.navigation.cells.filter(cell => cell.semanticRef.word != null).map(cell => cell.semanticRef.word),
+    [2,3]
+  );
+  assert.deepEqual(result.navigation.cells.filter(cell => cell.semanticRef.group != null).map(cell => cell.semanticRef.group),[2]);
+  assert.deepEqual(result.display.sentences.map(sentence => sentence.display.groups.map(group => group.id)),[[1],[2]]);
+
+  await page.locator('.word[data-index="0"]').evaluate(el => el.click());
+  await page.waitForTimeout(30);
+  result=await page.evaluate(() => ({
+    processing:window.KiriEditorData.getSentenceProcessingSnapshot(),
+    navigation:window.KiriEditorData.getNavigationSnapshot()
+  }));
+  assert.equal(result.processing.activeSentenceIndex,0);
+  assert.equal(result.navigation.sentenceIndex,0);
+  assert.deepEqual(result.navigation.cells.filter(cell => cell.semanticRef.group != null).map(cell => cell.semanticRef.group),[1]);
+});
+
+test('sentence-local movement reconnects through explicit horizontal and vertical adapters', async ({ page }) => {
+  await page.locator('#input').fill('a b\nc d');
+  await page.locator('#workspace').click();
+  await page.waitForFunction(() => document.querySelectorAll('.word:not([data-dummy])').length === 4);
+
+  await page.locator('.word[data-index="1"]').click();
+  await press(page,'l');
+  assert.equal((await currentCursor(page)).word,2);
+  await press(page,'h');
+  assert.equal((await currentCursor(page)).word,1);
+  await press(page,'j');
+  assert.equal((await currentCursor(page)).word,3);
+  await press(page,'h');
+  assert.equal((await currentCursor(page)).word,2);
+  await press(page,'h');
+  assert.equal((await currentCursor(page)).word,1);
+  await press(page,'k');
+  assert.equal((await currentCursor(page)).word,1);
+});
+
+test('the active navigation grid does not grow with unrelated sentences', async ({ page }) => {
+  const lines=Array.from({length:30},(_,line) => `w${line}a w${line}b w${line}c w${line}d`);
+  await page.locator('#input').fill(lines.join('\n'));
+  await page.locator('#workspace').click();
+  await page.waitForFunction(() => document.querySelectorAll('.word:not([data-dummy])').length === 120);
+  await page.locator('.word[data-index="119"]').click();
+  await page.waitForTimeout(30);
+  const result=await page.evaluate(() => ({
+    processing:window.KiriEditorData.getSentenceProcessingSnapshot(),
+    navigation:window.KiriEditorData.getNavigationSnapshot()
+  }));
+  assert.equal(result.processing.sentenceCount,30);
+  assert.equal(result.navigation.sentenceIndex,29);
+  assert.equal(result.navigation.cells.length,4);
+  assert.deepEqual(result.navigation.xAxis,[0,1,2,3]);
 });
 
 test('0 and $ move to the start and end of the current line', async ({ page }) => {
@@ -1374,13 +1754,65 @@ test('horizontal movement prefers the greatest row index not below the current r
   await page.waitForTimeout(50);
   await page.locator('.group-mark[data-group-work="3"]').evaluate((el) => el.click());
   await press(page,'l');
-  let cursor=await currentCursor(page);
-  assert.equal(cursor.group,'7');
-  assert.equal(cursor.text,'C');
-  await press(page,'h');
-  cursor=await currentCursor(page);
-  assert.equal(cursor.group,'3');
-  assert.equal(cursor.text,'A');
+  const cursor=await currentCursor(page);
+  assert.equal(cursor.group,'4');
+  assert.equal(cursor.text,'B');
+});
+
+test('l uses the rendered row snapshot and moves from the scolded group to by', async ({ page }) => {
+  const inner={version:1,text:'Dick has been being scolded by his boss for a long time.',sentences:[{
+    tokens:['s','aux','','','-4','pre','a','n','','','',''].map(text => ({slot:{kind:'single',text}})),
+    structures:[
+      {id:1,kind:'group',members:[2,3,4].map(token => ({token,port:'single'})),form:'underline',mark:'-4'},
+      {id:2,kind:'group',members:[6,7].map(token => ({token,port:'single'})),form:'underline',mark:'ad'},
+      {id:3,kind:'group',members:[{token:5,port:'single'},{structure:2,port:'single'}],form:'underline',mark:''},
+      {id:4,kind:'group',members:[{structure:1,port:'single'},{structure:3,port:'single'}],form:'underline',mark:''}
+    ]
+  }]};
+  await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
+  await page.waitForTimeout(50);
+  await page.locator('.group-mark[data-group-work="1"]').evaluate(el => el.click());
+  await page.waitForTimeout(50);
+
+  const before=await page.evaluate(() => window.KiriEditorData.getNavigationSnapshot());
+  const current=before.cells.find(cell => cell.semanticRef.group === 1);
+  const by=before.cells.find(cell => cell.semanticRef.word === 5);
+  assert.ok(current.displayRowIdx > by.displayRowIdx,JSON.stringify({current,by}));
+
+  await press(page,'l');
+  const cursor=await currentCursor(page);
+  assert.equal(cursor.word,5);
+  assert.equal(cursor.text,'pre');
+  assert.equal(cursor.group,null);
+});
+
+test('an empty atomic-only underline remains a candidate and projects one row when selected', async ({ page }) => {
+  const inner={version:1,text:'a b',sentences:[{
+    tokens:[0,1].map(() => ({slot:{kind:'single',text:''}})),
+    structures:[
+      {id:1,kind:'group',members:[{token:0,port:'single'}],form:'underline',mark:''}
+    ]
+  }]};
+  await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
+  await page.waitForTimeout(50);
+
+  let snapshot=await page.evaluate(() => window.KiriEditorData.getNavigationSnapshot());
+  let group=snapshot.cells.find(cell => cell.semanticRef.group === 1);
+  assert.ok(group);
+  assert.equal(group.isCollapsed,false);
+  assert.equal(group.logicalRowIdx,2);
+  assert.equal(group.display_y,2);
+  assert.deepEqual(snapshot.cursor,{x:0,y:1});
+
+  await page.locator('.group-underline[data-group-underline="1"]').evaluate(el => el.click());
+  await page.waitForTimeout(50);
+  snapshot=await page.evaluate(() => window.KiriEditorData.getNavigationSnapshot());
+  group=snapshot.cells.find(cell => cell.semanticRef.group === 1);
+  assert.equal(group.isCollapsed,true);
+  assert.equal(group.logicalRowIdx,2);
+  assert.equal(group.display_y,1);
+  assert.deepEqual(snapshot.cursor,{x:0,y:2});
+  assert.equal((await currentCursor(page)).group,'1');
 });
 
 test('j moves to the next line after reaching the bottom of the structural grid', async ({ page }) => {
@@ -1487,6 +1919,11 @@ test('an underline slot crossed by an arrow moves down with its containing under
   await page.evaluate((document,value) => window.KiriEditorData.loadInnerJson(document,value),base);
   await page.waitForTimeout(50);
   const withoutArrow=await positions();
+  const withoutArrowRows=await page.evaluate(() => Object.fromEntries(
+    window.KiriEditorData.getNavigationSnapshot().cells
+      .filter(cell => cell.semanticRef.group != null)
+      .map(cell => [cell.semanticRef.group,{display_y:cell.display_y,arrowRowOffset:cell.arrowRowOffset}])
+  ));
 
   const withArrow=structuredClone(base);
   withArrow.sentences[0].arrows=[{
@@ -1496,10 +1933,19 @@ test('an underline slot crossed by an arrow moves down with its containing under
   await page.evaluate((document,value) => window.KiriEditorData.loadInnerJson(document,value),withArrow);
   await page.waitForTimeout(50);
   const shifted=await positions();
+  const shiftedRows=await page.evaluate(() => Object.fromEntries(
+    window.KiriEditorData.getNavigationSnapshot().cells
+      .filter(cell => cell.semanticRef.group != null)
+      .map(cell => [cell.semanticRef.group,{display_y:cell.display_y,arrowRowOffset:cell.arrowRowOffset}])
+  ));
 
   assert.ok(Math.abs(shifted.child-withoutArrow.child-27) < 0.5,JSON.stringify({withoutArrow,shifted}));
   assert.ok(Math.abs(shifted.childSlot-withoutArrow.childSlot-27) < 0.5,JSON.stringify({withoutArrow,shifted}));
   assert.ok(Math.abs(shifted.parent-withoutArrow.parent-27) < 0.5,JSON.stringify({withoutArrow,shifted}));
+  assert.equal(shiftedRows['1'].display_y,withoutArrowRows['1'].display_y+1);
+  assert.equal(shiftedRows['2'].display_y,withoutArrowRows['2'].display_y+1);
+  assert.equal(shiftedRows['1'].arrowRowOffset,1);
+  assert.equal(shiftedRows['2'].arrowRowOffset,1);
 });
 
 test('an arrow through transparent slot space does not push down a disjoint underline', async ({ page }) => {
@@ -2052,6 +2498,49 @@ test('horizontal cursor target calculation is pure and shared-slot aware', async
   assert.deepEqual(result.column,{ref:{group:6,slot:null},columns:[4,5]});
 });
 
+test('region horizontal movement skips the current slot columns before choosing a row', async ({ page }) => {
+  const result=await page.evaluate(() => {
+    const input={
+      direction:'right',
+      current:{ref:{group:1},rowIdx:2,colIdx:0,columns:[0,1,3,4]},
+      candidates:[
+        {ref:{word:2},rowIdx:0,colIdx:2,columns:[2]},
+        {ref:{group:2},rowIdx:1,colIdx:2,columns:[2,3]},
+        {ref:{group:3},rowIdx:3,colIdx:2,columns:[2]}
+      ]
+    };
+    const before=JSON.stringify(input);
+    const right=window.KiriEditorCore.calculateRegionHorizontalTarget(input);
+    const left=window.KiriEditorCore.calculateRegionHorizontalTarget({
+      ...input,
+      direction:'left',
+      current:{...input.current,colIdx:4}
+    });
+    return {right,left,unchanged:before===JSON.stringify(input)};
+  });
+  assert.deepEqual(result.right,{
+    ref:{group:2},rowIdx:1,colIdx:2,columns:[2,3]
+  });
+  assert.deepEqual(result.left,{
+    ref:{group:2},rowIdx:1,colIdx:2,columns:[2,3]
+  });
+  assert.equal(result.unchanged,true);
+});
+
+test('horizontal grid movement prefers a visible candidate over a collapsed tie', async ({ page }) => {
+  const result=await page.evaluate(() => window.KiriEditorCore.calculateRegionHorizontalTarget({
+    direction:'right',
+    current:{ref:{group:1},rowIdx:2,colIdx:0,columns:[0,1]},
+    candidates:[
+      {ref:{group:2},rowIdx:1,colIdx:2,columns:[2],isCollapsed:true},
+      {ref:{word:2},rowIdx:1,colIdx:2,columns:[2],isCollapsed:false}
+    ]
+  }));
+  assert.deepEqual(result,{
+    ref:{word:2},rowIdx:1,colIdx:2,columns:[2],isCollapsed:false
+  });
+});
+
 test('selection path calculation is pure, backtracks, and compresses only visited refs', async ({ page }) => {
   const result=await page.evaluate(() => {
     const core=window.KiriEditorCore;
@@ -2451,9 +2940,11 @@ async function run() {
   const executablePath = findBrowserExecutable();
   const browser = await chromium.launch(executablePath ? { executablePath } : {});
   const failures = [];
+  const filter = process.env.KIRI_TEST_FILTER;
+  const selectedTests = filter ? tests.filter(item => item.name.includes(filter)) : tests;
 
   try {
-    for (const item of tests) {
+    for (const item of selectedTests) {
       const page = await newPage(browser);
       try {
         await item.fn({ page });
@@ -2471,11 +2962,11 @@ async function run() {
   }
 
   if (failures.length) {
-    console.error(`\n${failures.length} failed, ${tests.length - failures.length} passed`);
+    console.error(`\n${failures.length} failed, ${selectedTests.length - failures.length} passed`);
     process.exit(1);
   }
 
-  console.log(`\n${tests.length} passed`);
+  console.log(`\n${selectedTests.length} passed`);
 }
 
 function findBrowserExecutable() {

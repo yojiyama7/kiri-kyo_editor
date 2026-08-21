@@ -1,5 +1,45 @@
 # Work Log
 
+## 2026-08-21 文単位処理の分離
+
+- 文書状態を改行ごとの`sentence_state`へ分割する`splitSentenceStates()`をcoreへ追加し、token、境界・疑似token、group、矢印を文単位の局所配列として渡すようにした。
+- groupの所属文を保存上のmembersから再帰判定し、読み込み直後で描画segmentが未生成でも子group・親groupを正しい文へ収容する。
+- display layout、logical navigation grid、下線描画、矢印layout・衝突判定を1つのsentence stateを受け取る関数へ変更。現在のnavigation snapshotはactive文だけを持つ。
+- 行間移動を文内移動から分離。`h/l`は文内gridが端へ達した後だけ前後文の表面端へ接続し、`j/k`は文内構造移動が尽きた後だけ前後文の最寄り論理xへ接続する。V選択は文境界を跨がない。
+- 30文・各4tokenの文書でもactive navigation gridが4 atomic cellだけになる回帰テスト、各文のgroup/arrow分離、横・縦の行間adapterテストを追加。
+- モデルテスト通過、active規則監査179規則・32,041順序対・未解決矛盾0、ブラウザテスト128件通過。
+
+## 2026-08-21 型付きSentenceStateモデルの段階導入
+
+- 矢印衝突回避前後のgroup描画位置差を固定段幅で離散化し、`arrowRowOffset`として`display_y`へ加算。直接交差したgroupだけでなく、重なり・包含により実際に追従して下がったgroupも反映し、論理cursorのx/yは変更しない。
+- 現在位置の唯一の正本を`navigationCursor={x,y}`へ一本化し、semantic ref、word/group cursor、slot side、region、`display_y`を論理座標から導出するよう変更。旧cursor群は描画互換cacheへ降格し、不一致にしても移動先へ影響しない回帰テストを追加。
+- 論理xを表面要素ごとの整数とし、Double/Tの左右だけを`x`/`x+0.5`へ配置。実在x軸の順序で分割regionを判定し、後続表面要素の整数xをdouble/T切替で変更しない。
+- 論理yをatomic=1、最内側group=2、親group=3以上へ変更。構造slot参照による親子関係も論理levelへ反映し、同一`(x,y)`のselectable cell衝突を検出する。
+- `display_y`をDOMのpixel Yではなく論理cellの段占有から導出。空atomicは0、占有atomicは1、直下段が空のgroupは`logical_y-1`とし、省略量を祖先へ累積させない。
+- `h/l`は時刻tのsnapshotを固定し、現在region外の最初の実在xで現在`display_y`以下の最大候補へ移動する。ABCD/X/Y/Zの全無標識例でXからYへ移るテスト、resize/scroll不変テスト、Double/T半整数xテストを追加。
+- モデルテスト通過、active規則監査173規則・29,929順序対・未解決矛盾0、ブラウザテスト125件通過。
+- ユーザー提示の`Mark`、3種のslot、word slot、underline group、token、sentence stateを`editor-model.d.ts`へそのまま型定義として追加。
+- `Mark`へ既存標識コード`o/c/con/pre/ap`を追加し、表示値`O/C/接/前/同格`との対応を仕様化。
+- `Mark`の末尾へ`string`を追加し、実行時検証でも任意文字列を受理するよう変更。文字列以外は引き続き拒否する。
+- WordSlotのT化を包含モデルへ変更。`TSlot.pre_slot`は設計上の不変条件どおりAtomicSlotに固定し、AtomicSlotのT解除時に同じslotをWordSlotへ復元する純粋変換と往復テストを追加。DoubleSlotの直接T化は拒否する。
+- 分割下線のgroup cursorが全区間を最小colへ潰していた移動規則をregion-aware探索へ変更。クリックした区間内のatomic列を保持し、h/lは現在regionを抜けるまでxを進めた後、最初の外部列で現在row以下の最大rowを選ぶ。
+- cursor枠は保持列を含む分割regionだけへ表示。左右2slotずつの分割下線から中央gapへ出る両方向テストと純粋計算テストを追加し、旧「中央列を飛ばす」期待を新規則へ更新。
+- 外部の`she`から`l`で`is ... taking`へ入る際、groupの最小列`is`へ戻って第1regionを選ぶ問題を修正。移動先targetへ到達atomic列`taking`を付帯し、第2regionだけにcursorを表示するテストを追加。
+- 横移動の行比較を構造`level`から描画済み表示gridへ変更。下線・カーソル・矢印の最終Yを`displayRowIdx`へ正規化し、分割groupをregion単位のcellとしてスナップショット化した。
+- atomicだけからなる空groupは`isCollapsed`候補として保持し、選択中は展開する。同一列・表示段では可視候補を優先し、1キー中は移動前スナップショットを固定する。
+- `Dick has been being scolded by ...`で`scolded`側groupから`l`すると`by`へ移る回帰テスト、atomic-only省略候補、可視優先の純粋計算テストを追加。
+- active規則監査は164規則・26,896順序対・未解決矛盾0。ブラウザテスト結果: 122 passed。
+- カーソルの正本を`navigationCursor={x,y}`へ変更。xはatomic葉列、yは省略前の構造`logicalRowIdx`とし、表示段の圧縮をカーソル座標へ書き戻さない。
+- navigation snapshotの各cellへ`logicalRowIdx`と`displayRowIdx`を併記し、h/lの移動判定時だけ表示行へ射影する。診断snapshotにも論理cursor座標を含めた。
+- active規則監査は165規則・27,225順序対・未解決矛盾0。ブラウザテスト結果: 122 passed。
+- `TSlot.pre_slot`をAtomicSlotへ戻し、型・実行時validator・変換関数で不変条件を固定。規則監査は166規則・27,556順序対・未解決矛盾0、ブラウザテストは122 passed。
+- ブラウザ実行用の`editor-model.js`を追加し、`createSentenceState()`と`validateSentenceState()`を実装。
+- SlotIdの一意性、token recordとchainの整合性、group child参照、cursor参照、Mark値を実行時に検証する。
+- `index.html`でcoreより先にmodelを読み、`window.KiriEditorData.model`として公開。
+- 正常なdouble/T/groupを含む状態と、壊れたTokenId/SlotId参照をブラウザテストへ追加。
+- 提示型には空slot、追加標識、表面単語、疑似token、境界、矢印、複数文がないため、既存inner_jsonの即時置換は行わず互換層として導入。
+- active規則監査は159規則・25,281順序対・未解決矛盾0。ブラウザテスト結果: 115 passed。
+
 ## 2026-08-17
 
 ユーザー指示:

@@ -990,6 +990,7 @@
   </div>
 </div>
 
+<script src="./editor-model.js"></script>
 <script src="./editor-core.js"></script>
 <script>
 (() => {
@@ -1050,7 +1051,19 @@
   let groupCursorId = null;   // 語群全体の働きの標識を選択中
   let groupCursorSlot = null; // group T の 'left' / 'right'。通常groupでは null
   let groupCursorTarget = null; // null | 'underline' | 'single' | 'left' | 'right'。表示カーソル対象は常に1つ
-  let navigationColIdx = null; // 最後の左右移動で選んだ葉列。上下移動中は維持する。
+  // カーソル座標は省略前の完全な論理grid上に保持する。
+  // xは表面atomic列（splitの後半は+.5）、yはatomic=1から始まる構造段。
+  // 表示上の段圧縮や矢印回避による押し下げはここへ書き戻さない。
+  let navigationCursor = {x:null,y:null};
+  // 描画済みの表示だけを正本にするナビゲーション・スナップショット。
+  // render中に無効化し、overlayの配置が確定した時点で丸ごと置換する。
+  let navigationGridSnapshot = null;
+  // 初回描画と矢印回避後の描画差から得る、groupごとの離散的な表示段offset。
+  // navigationCursorの正本状態には含めず、表示snapshotへだけ投影する。
+  let navigationArrowRowOffsets = new Map();
+  let sentenceStateCache = null;
+  let displaySentenceCache = new Map();
+  let displayDocumentCache = null;
 
   // Vim風 undo / redo は、文書内容を変更するすべての編集操作に適用する。
   // u      : 直前の編集を取り消す
@@ -1064,7 +1077,7 @@
   function readEditorState(){
     return {
       mode, pendingKeys, pendingRef, numericPending,
-      cursor, cursorSlot, text:input.value, tokens, sentenceRanges,
+      cursor, cursorSlot, navigationCursor, text:input.value, tokens, sentenceRanges,
       workSlots, verbals, arrows, arrowDraft, arrowHistoryBefore, gaps, boundarySlots, gapTokens, gapMode,
       gapCursor, gapTokenCursor, boundaryCursor, groups, nextGroupId, groupSelection, groupCursorId,
       groupCursorSlot, groupCursorTarget
@@ -1078,6 +1091,9 @@
     numericPending=next.numericPending;
     cursor=next.cursor;
     cursorSlot=next.cursorSlot;
+    navigationCursor=next.navigationCursor
+      ? {...next.navigationCursor}
+      : navigationCursor;
     tokens=next.tokens;
     sentenceRanges=next.sentenceRanges;
     workSlots=next.workSlots;
@@ -1098,6 +1114,45 @@
     groupCursorId=next.groupCursorId;
     groupCursorSlot=next.groupCursorSlot;
     groupCursorTarget=next.groupCursorTarget;
+    invalidateSentenceProcessingCaches();
+  }
+
+  function invalidateSentenceProcessingCaches(){
+    sentenceStateCache=null;
+    displaySentenceCache=new Map();
+    displayDocumentCache=null;
+  }
+
+  function sentenceProcessingStates(){
+    if(!sentenceStateCache) sentenceStateCache=Core.splitSentenceStates(readEditorState());
+    return sentenceStateCache;
+  }
+
+  function sentenceProcessingState(index){
+    return sentenceProcessingStates().find(state => state.index === index) || null;
+  }
+
+  function currentSentenceIndexForProcessing(){
+    if(boundaryCursor) return sentenceOfRef(boundaryCursor);
+    if(gapTokenCursor) return sentenceOfRef(gapTokenCursor);
+    if(groupCursorId != null) return sentenceOfRef({group:groupCursorId,slot:groupCursorSlot});
+    if(cursor < tokens.length) return sentenceOfWord(cursor);
+    return sentenceRanges.find(range => range.end > range.start)?.index ?? 0;
+  }
+
+  function currentSentenceProcessingState(){
+    return sentenceProcessingState(currentSentenceIndexForProcessing())
+      || sentenceProcessingStates().find(state => state.tokens.length)
+      || sentenceProcessingStates()[0]
+      || null;
+  }
+
+  function displaySentenceForState(sentenceState){
+    if(!sentenceState) return null;
+    if(!displaySentenceCache.has(sentenceState.index)){
+      displaySentenceCache.set(sentenceState.index,Core.createDisplaySentence(sentenceState));
+    }
+    return displaySentenceCache.get(sentenceState.index);
   }
 
   function applyEditorTransition(recipe){
@@ -1427,6 +1482,15 @@
     return displayLayoutMap();
   }
 
+  function sentenceDisplayLayoutMap(sentenceState=currentSentenceProcessingState()){
+    const sentenceDoc=displaySentenceForState(sentenceState);
+    if(!sentenceDoc || !sentenceState) return new Map();
+    return new Map((sentenceDoc.display?.groups || []).map(layout => [layout.id,{
+      ...layout,
+      wordOffset:sentenceState.wordOffset
+    }]));
+  }
+
   function primitiveSlotRef(key,wordOffset=0){
     const pseudoMatch=/^pseudo-token:(\d+):(\d+):single$/.exec(key || '');
     if(pseudoMatch) return pseudoRef(wordOffset+Number(pseudoMatch[1]),Number(pseudoMatch[2]));
@@ -1457,41 +1521,301 @@
     return refs.filter((ref,index) => refs.findIndex(candidate => sameDisplayRef(candidate,ref)) === index);
   }
 
-  function navigationLeafRefs(){
-    const refs=[];
-    for(let gap=0;gap<=tokens.length;gap++){
-      refs.push(...boundaryRefsAt(gap),...pseudoRefsAt(gap));
-      if(gap < tokens.length) refs.push(...intrinsicWordRefs(gap));
+  function navigationLeafEntries(sentenceState=currentSentenceProcessingState()){
+    const entries=[];
+    if(!sentenceState) return entries;
+    let surfaceX=0;
+    for(let gap=sentenceState.range.start;gap<=sentenceState.range.end;gap++){
+      const surfaceRefs=[...boundaryRefsAt(gap),...pseudoRefsAt(gap)]
+        .filter(ref => sentenceOfRef(ref) === sentenceState.index);
+      for(const ref of surfaceRefs){
+        entries.push({ref:cloneRef(ref),x:surfaceX});
+        surfaceX++;
+      }
+      if(gap < sentenceState.range.end){
+        const refs=intrinsicWordRefs(gap);
+        refs.forEach((ref,index) => entries.push({ref:cloneRef(ref),x:surfaceX+(index ? 0.5 : 0)}));
+        surfaceX++;
+      }
     }
-    return refs;
+    return entries;
   }
 
-  function navigationColumnsForRef(ref,layouts=groupDisplayLayoutMap(),leafRefs=navigationLeafRefs()){
-    const refs=ref?.boundary != null
-      ? [boundaryRef(ref.boundary,ref.boundaryIndex)]
-      : ref?.gapToken != null
-      ? [pseudoRef(ref.gapToken,ref.gapTokenIndex)]
-      : ref?.group != null
-      ? groupLeafRefs(groupById(ref.group),layouts)
-      : intrinsicWordRefs(ref?.word).filter(candidate =>
-          ref?.slot == null || candidate.slot === ref.slot
-        );
-    return refs
-      .map(candidate => leafRefs.findIndex(leaf => sameDisplayRef(leaf,candidate)))
-      .filter(index => index >= 0);
+  function navigationLeafRefs(sentenceState=currentSentenceProcessingState()){
+    return navigationLeafEntries(sentenceState).map(entry => cloneRef(entry.ref));
   }
 
-  function navigationCellForRef(ref,layouts=groupDisplayLayoutMap(),leafRefs=navigationLeafRefs()){
+  function navigationLeafXAxis(sentenceState=currentSentenceProcessingState()){
+    return navigationLeafEntries(sentenceState).map(entry => entry.x);
+  }
+
+  function navigationXForLeafRef(ref,sentenceState=sentenceProcessingState(sentenceOfRef(ref)) || currentSentenceProcessingState()){
+    return navigationLeafEntries(sentenceState).find(entry => sameDisplayRef(entry.ref,ref))?.x ?? null;
+  }
+
+  function navigationColumnsForRef(
+    ref,
+    layouts=sentenceDisplayLayoutMap(sentenceProcessingState(sentenceOfRef(ref)) || currentSentenceProcessingState()),
+    leafRefs=navigationLeafRefs(sentenceProcessingState(sentenceOfRef(ref)) || currentSentenceProcessingState()),
+    visited=new Set(),
+    sentenceState=sentenceProcessingState(sentenceOfRef(ref)) || currentSentenceProcessingState()
+  ){
+    if(!ref) return [];
+    if(ref.group == null){
+      const x=navigationXForLeafRef(ref,sentenceState);
+      return Number.isFinite(x) ? [x] : [];
+    }
+    if(visited.has(ref.group)) return [];
+    const nextVisited=new Set(visited);
+    nextVisited.add(ref.group);
+    const columns=groupLeafRefs(groupById(ref.group),layouts)
+      .flatMap(candidate => navigationColumnsForRef(candidate,layouts,leafRefs,nextVisited,sentenceState));
+    const ordered=[...new Set(columns)].sort((a,b) => a-b);
+    if((ref.slot === 'left' || ref.slot === 'right') && ordered.length){
+      const base=ordered[0];
+      return [ref.slot === 'left' ? base : base+0.5];
+    }
+    return ordered;
+  }
+
+  function logicalGroupLevel(groupId,layouts=groupDisplayLayoutMap(),memo=new Map(),visiting=new Set()){
+    if(memo.has(groupId)) return memo.get(groupId);
+    if(visiting.has(groupId)) return Number(layouts.get(groupId)?.level || 0);
+    const nextVisiting=new Set(visiting);
+    nextVisiting.add(groupId);
+    const group=groupById(groupId);
+    let level=Number(layouts.get(groupId)?.level || 0);
+    for(const member of group?.members || []){
+      if(member.group == null) continue;
+      level=Math.max(level,logicalGroupLevel(member.group,layouts,memo,nextVisiting)+1);
+    }
+    memo.set(groupId,level);
+    return level;
+  }
+
+  function structuralNavigationCellForRef(
+    ref,
+    layouts=sentenceDisplayLayoutMap(sentenceProcessingState(sentenceOfRef(ref)) || currentSentenceProcessingState()),
+    leafRefs=navigationLeafRefs(sentenceProcessingState(sentenceOfRef(ref)) || currentSentenceProcessingState()),
+    sentenceState=sentenceProcessingState(sentenceOfRef(ref)) || currentSentenceProcessingState()
+  ){
     if(!ref) return null;
-    const columns=navigationColumnsForRef(ref,layouts,leafRefs);
+    const columns=navigationColumnsForRef(ref,layouts,leafRefs,new Set(),sentenceState);
     if(!columns.length) return null;
     const layout=ref.group != null ? layouts.get(ref.group) : null;
+    const logicalRowIdx=ref.group != null ? logicalGroupLevel(ref.group,layouts)+2 : 1;
     return {
       ref:cloneRef(ref),
-      rowIdx:ref.group != null ? (layout?.level || 0)+1 : 0,
+      semanticRef:cloneRef(ref),
+      semantic_ref:cloneRef(ref),
+      logicalRowIdx,
+      displayRowIdx:logicalRowIdx,
+      rowIdx:logicalRowIdx,
       colIdx:Math.min(...columns),
-      columns
+      x:Math.min(...columns),
+      columns,
+      isCollapsed:false
     };
+  }
+
+  function navigationRefs(leafRefs=navigationLeafRefs(),sentenceState=currentSentenceProcessingState()){
+    const refs=leafRefs.filter(isValidDisplayRef).map(cloneRef);
+    for(const group of sentenceState?.groups || []){
+      const verbal=ensureGroupVerbal(group);
+      if(verbal.on){
+        if(tSlot(verbal,'left').enabled) refs.push({group:group.id,slot:'left'});
+        if(tSlot(verbal,'right').enabled) refs.push({group:group.id,slot:'right'});
+      }else{
+        refs.push({group:group.id,slot:null});
+      }
+    }
+    return refs.filter((ref,index) => refs.findIndex(candidate => sameDisplayRef(candidate,ref)) === index);
+  }
+
+  function contiguousNavigationRegions(columns,xAxis=navigationLeafXAxis()){
+    const ordered=[...new Set((columns || []).map(Number).filter(Number.isFinite))].sort((a,b) => a-b);
+    const axis=[...new Set([...(xAxis || []),...ordered].map(Number).filter(Number.isFinite))].sort((a,b) => a-b);
+    const regions=[];
+    const selected=new Set(ordered);
+    for(const column of axis){
+      if(!selected.has(column)) continue;
+      const previousAxisIndex=axis.indexOf(column)-1;
+      const previous=previousAxisIndex >= 0 ? axis[previousAxisIndex] : null;
+      const current=regions.at(-1);
+      if(!current || !selected.has(previous)) regions.push([column]);
+      else current.push(column);
+    }
+    return regions;
+  }
+
+  function groupRegionVisualY(ref,columns,layouts,leafRefs){
+    const layout=layouts.get(ref.group);
+    const lines=[...groupLayer.querySelectorAll(`[data-group-underline="${ref.group}"]`)];
+    const matching=lines.filter(line => {
+      const segmentIndex=Number(line.dataset.groupSegment || 0);
+      const segment=layout?.underlineSegments?.[segmentIndex];
+      const segmentColumns=(segment?.primitiveSlots || [])
+        .map(key => primitiveSlotRef(key,layout?.wordOffset || 0))
+        .map(ref => navigationXForLeafRef(ref))
+        .filter(Number.isFinite);
+      return segmentColumns.some(column => columns.includes(column));
+    });
+    const ys=(matching.length ? matching : lines).map(line => rectInWorkspace(line).top);
+    return ys.length ? Math.min(...ys) : null;
+  }
+
+  function selectionContainsNavigationRef(ref){
+    if(!groupSelection) return false;
+    return [...(groupSelection.paths || []).flat(),...(groupSelection.path || [])]
+      .some(candidate => sameDisplayRef(candidate,ref));
+  }
+
+  function logicalCursorCell(cells){
+    return (cells || []).find(cell =>
+      cell.logicalRowIdx === navigationCursor.y
+      && cell.columns.includes(navigationCursor.x)
+    ) || null;
+  }
+
+  function navigationCellOccupiesOwnRow(cell){
+    if(!cell) return false;
+    if(cell.logicalRowIdx === navigationCursor.y && cell.columns.includes(navigationCursor.x)) return true;
+    if(pendingRef && sameDisplayRef(pendingRef,cell.semanticRef)) return true;
+    if(selectionContainsNavigationRef(cell.semanticRef)) return true;
+    return Boolean(storedSlotText(cell.semanticRef));
+  }
+
+  function navigationCellInsideGroup(cell,g,layout){
+    if(cell?.semanticRef?.group != null){
+      return (layout?.contains || []).includes(cell.semanticRef.group);
+    }
+    return refInsideGroup(cell?.semanticRef,g);
+  }
+
+  function buildLogicalNavigationCells(
+    sentenceState=currentSentenceProcessingState(),
+    layouts=sentenceDisplayLayoutMap(sentenceState),
+    leafRefs=navigationLeafRefs(sentenceState)
+  ){
+    const levelMemo=new Map();
+    const descriptors=navigationRefs(leafRefs,sentenceState).map(ref => ({
+      ref,
+      columns:navigationColumnsForRef(ref,layouts,leafRefs,new Set(),sentenceState)
+    })).filter(item => item.columns.length);
+    const logicalAxis=[...new Set(descriptors.flatMap(item => item.columns))].sort((a,b) => a-b);
+    const cells=[];
+    for(const {ref,columns} of descriptors){
+      const regions=ref.group != null ? contiguousNavigationRegions(columns,logicalAxis) : [columns];
+      const layout=ref.group != null ? layouts.get(ref.group) : null;
+      for(const region of regions){
+        const logicalRowIdx=ref.group != null ? logicalGroupLevel(ref.group,layouts,levelMemo)+2 : 1;
+        cells.push({
+          semanticRef:cloneRef(ref),
+          semantic_ref:cloneRef(ref),
+          ref:cloneRef(ref),
+          colIdx:Math.min(...region),
+          x:Math.min(...region),
+          logicalRowIdx,
+          logical_y:logicalRowIdx,
+          columns:[...region],
+          region_xs:[...region],
+          sentenceIdx:sentenceOfRef(ref)
+        });
+      }
+    }
+    const collisions=[];
+    for(const cell of cells){
+      for(const x of cell.columns){
+        const other=cells.find(candidate => candidate !== cell
+          && candidate.logicalRowIdx === cell.logicalRowIdx
+          && candidate.columns.includes(x));
+        if(other) collisions.push({x,y:cell.logicalRowIdx});
+      }
+    }
+    if(collisions.length) throw new Error(`logical navigation grid collision at ${JSON.stringify(collisions[0])}`);
+    return cells;
+  }
+
+  function rebuildNavigationGridSnapshot(){
+    const sentenceState=currentSentenceProcessingState();
+    const layouts=sentenceDisplayLayoutMap(sentenceState);
+    const leafRefs=navigationLeafRefs(sentenceState);
+    const pending=buildLogicalNavigationCells(sentenceState,layouts,leafRefs);
+    for(const cell of pending){
+      const occupies=navigationCellOccupiesOwnRow(cell);
+      let displayRowIdx;
+      if(cell.logicalRowIdx === 1){
+        displayRowIdx=occupies ? 1 : 0;
+      }else{
+        const g=groupById(cell.semanticRef.group);
+        const layout=layouts.get(cell.semanticRef.group);
+        const immediateChildren=pending.filter(candidate =>
+          candidate.logicalRowIdx === cell.logicalRowIdx-1
+          && candidate.columns.some(x => cell.columns.includes(x))
+          && navigationCellInsideGroup(candidate,g,layout)
+        );
+        displayRowIdx=immediateChildren.every(candidate => !navigationCellOccupiesOwnRow(candidate))
+          ? cell.logicalRowIdx-1
+          : cell.logicalRowIdx;
+        displayRowIdx+=navigationArrowRowOffsets.get(cell.semanticRef.group) || 0;
+      }
+      cell.displayRowIdx=displayRowIdx;
+      cell.display_y=displayRowIdx;
+      cell.rowIdx=displayRowIdx;
+      cell.arrowRowOffset=cell.logicalRowIdx === 1
+        ? 0
+        : (navigationArrowRowOffsets.get(cell.semanticRef.group) || 0);
+      cell.isCollapsed=displayRowIdx < cell.logicalRowIdx;
+      cell.omitted=cell.isCollapsed;
+      delete cell.sentenceIdx;
+    }
+    const xAxis=[...new Set(pending.flatMap(cell => cell.columns))].sort((a,b) => a-b);
+    navigationGridSnapshot=Object.freeze({
+      sentenceIndex:sentenceState?.index ?? -1,
+      cursor:Object.freeze({...navigationCursor}),
+      xAxis:Object.freeze(xAxis),
+      cells:Object.freeze(pending.map(cell => Object.freeze({...cell,columns:Object.freeze([...cell.columns])})))
+    });
+    return navigationGridSnapshot;
+  }
+
+  function navigationSnapshotCells(){
+    return navigationGridSnapshot?.cells || [];
+  }
+
+  function navigationCellForRef(ref,layouts=null,leafRefs=null){
+    if(!ref) return null;
+    const sentenceState=sentenceProcessingState(sentenceOfRef(ref)) || currentSentenceProcessingState();
+    const resolvedLayouts=layouts || sentenceDisplayLayoutMap(sentenceState);
+    const resolvedLeafRefs=leafRefs || navigationLeafRefs(sentenceState);
+    const matches=navigationGridSnapshot?.sentenceIndex === sentenceState?.index
+      ? navigationSnapshotCells().filter(cell => sameDisplayRef(cell.semanticRef,ref))
+      : [];
+    if(matches.length){
+      return matches.find(cell => cell.columns.includes(navigationCursor.x)) || matches[0];
+    }
+    return structuralNavigationCellForRef(ref,resolvedLayouts,resolvedLeafRefs,sentenceState);
+  }
+
+  function navigationCandidateCells(layouts=null,leafRefs=null,sentenceState=currentSentenceProcessingState()){
+    const resolvedLayouts=layouts || sentenceDisplayLayoutMap(sentenceState);
+    const resolvedLeafRefs=leafRefs || navigationLeafRefs(sentenceState);
+    if(navigationSnapshotCells().length) return navigationSnapshotCells().map(cell => ({...cell,columns:[...cell.columns]}));
+    return navigationRefs(resolvedLeafRefs,sentenceState)
+      .map(ref => structuralNavigationCellForRef(ref,resolvedLayouts,resolvedLeafRefs,sentenceState))
+      .filter(Boolean);
+  }
+
+  function navigationColumnClosestToClientX(refs,clientX){
+    const candidates=(refs || []).map(ref => {
+      const colIdx=navigationXForLeafRef(ref);
+      const el=getDisplayElement(ref);
+      if(!Number.isFinite(colIdx) || !el) return null;
+      const rect=el.getBoundingClientRect();
+      return {colIdx,distance:Math.abs((rect.left+rect.right)/2-clientX)};
+    }).filter(Boolean);
+    candidates.sort((left,right) => left.distance-right.distance || left.colIdx-right.colIdx);
+    return candidates[0]?.colIdx ?? null;
   }
 
   function groupById(id){
@@ -1501,6 +1825,10 @@
 
 
   function setGroupCursor(id, target = null){
+    // A group may have been created by the immediately preceding command.
+    // Resolve its logical cell from a fresh sentence slice, never from a
+    // pre-edit per-sentence layout cache.
+    invalidateSentenceProcessingCaches();
     gapTokenCursor=null;
     boundaryCursor=null;
     const g = groupById(id);
@@ -1523,6 +1851,11 @@
     }
     groupCursorId = g.id;
     groupCursorTarget = resolved;
+    const columns=navigationColumnsForRef({group:g.id,slot:groupCursorSlot});
+    const preferredX=columns.includes(navigationCursor.x)
+      ? navigationCursor.x
+      : (resolved === 'right' ? Math.max(...columns) : Math.min(...columns));
+    setLogicalCursorForRef({group:g.id,slot:groupCursorSlot},preferredX);
     cursor = g.start;
     cursorSlot = null;
     return true;
@@ -1558,12 +1891,7 @@
   function selectGroupTForWord(index, preferredSlot = null){
     const g = groupTForWord(index);
     if(!g || !ensureGroupVerbal(g).on) return false;
-    groupCursorId = g.id;
-    groupCursorSlot = groupTSlotForWord(index, preferredSlot);
-    groupCursorTarget = groupCursorSlot;
-    cursor = g.start;
-    cursorSlot = null;
-    return true;
+    return setGroupCursor(g.id,groupTSlotForWord(index, preferredSlot));
   }
 
   function innerJsonRepresentation(){
@@ -1571,14 +1899,22 @@
   }
 
   function displayJsonRepresentation(){
-    return Core.createDisplayJson(innerJsonRepresentation());
+    if(!displayDocumentCache){
+      displayDocumentCache={
+        version:1,
+        text:input.value,
+        sentences:sentenceProcessingStates().map(displaySentenceForState),
+        display:{groupLineStep:27}
+      };
+    }
+    return displayDocumentCache;
   }
 
   function loadInnerJsonRepresentation(document){
     const next=Core.stateFromInnerJson(document);
     input.value=next.text;
     writeEditorState(next);
-    navigationColIdx=null;
+    navigationCursor={x:null,y:null};
     for(const g of groups) normalizeGroupRefs(g);
     render();
     workspace.focus();
@@ -1671,6 +2007,16 @@
     return Core.createTokenSequence(tokenCount,pseudos);
   }
 
+  function tokenSequenceForSentence(sentenceState=currentSentenceProcessingState()){
+    if(!sentenceState) return [];
+    const owned=new Set(sentenceState.ownedLocalGaps || []);
+    const pseudos=sentenceState.gapTokens.map((items,localGap) => owned.has(localGap) ? items : []);
+    return Core.createTokenSequence(sentenceState.tokens.length,pseudos).map(item => item.kind === 'pseudo-token'
+      ? {...item,gap:sentenceState.wordOffset+item.gap}
+      : {...item,index:sentenceState.wordOffset+item.index}
+    );
+  }
+
   function tokenSequenceItemRef(item){
     if(!item) return null;
     return item.kind === 'pseudo-token'
@@ -1734,9 +2080,9 @@
     render();
   }
 
-  function selectionDisplayOrder(){
+  function selectionDisplayOrder(sentenceState=null){
     const list = [];
-    for(const item of tokenSequence()){
+    for(const item of sentenceState ? tokenSequenceForSentence(sentenceState) : tokenSequence()){
       if(item.kind === 'pseudo-token'){
         list.push(tokenSequenceItemRef(item));
         continue;
@@ -1753,7 +2099,7 @@
         list.push({word:i, slot:null});
       }
 
-      const ending = groups.filter(g => g.end === i).sort((a,b) => {
+      const ending = (sentenceState?.groups || groups).filter(g => g.end === i).sort((a,b) => {
         const as=a.end-a.start, bs=b.end-b.start;
         return as-bs || a.id-b.id;
       });
@@ -1871,8 +2217,13 @@
   }
 
   function render(){
+    invalidateSentenceProcessingCaches();
+    navigationGridSnapshot=null;
+    navigationArrowRowOffsets=new Map();
     // enabled はT包含関係から毎回再計算する。内容そのものは決して捨てない。
     refreshWorkSlotEnabled();
+    // 現在位置は論理座標だけから復元する。以下の旧フィールドは描画互換cacheである。
+    syncLegacyCursorCacheFromLogical();
     sentence.innerHTML = '';
 
     if(tokens.length === 0){
@@ -1955,6 +2306,7 @@
             if(gapMode) return;
             ev.stopPropagation();
             boundaryCursor=cloneRef(ref);
+            setLogicalCursorForRef(ref);
             gapTokenCursor=null;
             groupSelection=null;
             clearGroupCursor();
@@ -2012,7 +2364,7 @@
         word.append(tokenEl,markEl);
         word.addEventListener('click',()=>{
           gapTokenCursor=cloneRef(ref);
-          navigationColIdx=navigationCellForRef(ref)?.colIdx ?? null;
+          setLogicalCursorForRef(ref);
           gapMode=false;
           groupSelection=null;
           clearGroupCursor();
@@ -2142,6 +2494,7 @@
           ev.stopPropagation();
           cursor = i;
           cursorSlot = 'left';
+          setLogicalCursorForRef({word:i,slot:'left'});
           gapMode = false;
           clearGroupCursor();
           groupSelection = null;
@@ -2152,6 +2505,7 @@
           ev.stopPropagation();
           cursor = i;
           cursorSlot = 'right';
+          setLogicalCursorForRef({word:i,slot:'right'});
           gapMode = false;
           clearGroupCursor();
           groupSelection = null;
@@ -2212,6 +2566,7 @@
           ev.stopPropagation();
           cursor = i;
           cursorSlot = 'left';
+          setLogicalCursorForRef({word:i,slot:'left'});
           gapMode = false;
           clearGroupCursor();
               setMode('NORMAL');
@@ -2221,6 +2576,7 @@
           ev.stopPropagation();
           cursor = i;
           cursorSlot = 'right';
+          setLogicalCursorForRef({word:i,slot:'right'});
           gapMode = false;
           clearGroupCursor();
               setMode('NORMAL');
@@ -2247,6 +2603,7 @@
           cursorSlot = verbals[i]?.on
             ? 'left'
             : (slotIsDouble(i) ? 'left' : null);
+          setLogicalCursorForRef({word:i,slot:cursorSlot});
           clearGroupCursor();
         }
 
@@ -2398,24 +2755,35 @@
     if(index < 0 || index > tokens.length) return null;
     if(index === tokens.length) return {kind:'dummy', word:index, slot:null};
 
+    const entrySlot=(verbals[index]?.on || slotIsDouble(index))
+      ? (preferredSlot === 'right' ? 'right' : 'left')
+      : null;
+    const entryCell=navigationCellForRef({word:index,slot:entrySlot});
+    const withEntryCoordinates=target => entryCell
+      ? {...target,navigationX:entryCell.colIdx,navigationY:entryCell.logicalRowIdx}
+      : target;
+
     const g = groupForWord(index);
     if(g && ensureGroupVerbal(g).on){
       const slot=groupTSlotForWord(index, preferredSlot);
-      return {kind:'group', group:g.id, slot, target:slot, paired:true};
+      const groupCell=navigationCellForRef({group:g.id,slot});
+      return groupCell
+        ? {kind:'group',group:g.id,slot,target:slot,paired:true,navigationX:groupCell.colIdx,navigationY:groupCell.logicalRowIdx}
+        : {kind:'group',group:g.id,slot,target:slot,paired:true};
     }
 
     if(g?.mark){
-      return {kind:'group', group:g.id, slot:null, target:'single', paired:false};
+      return withEntryCoordinates({kind:'group',group:g.id,slot:null,target:'single',paired:false});
     }
 
     // 個別標識が無いgroupには、内側の空slotではなく下線から入る。
     if(g && !groupHasActualIndividualWork(g)){
-      return {kind:'group', group:g.id, slot:null, target:'underline', paired:false};
+      return withEntryCoordinates({kind:'group',group:g.id,slot:null,target:'underline',paired:false});
     }
 
     const paired=Boolean(verbals[index]?.on || slotIsDouble(index));
     const slot=paired ? (preferredSlot === 'right' ? 'right' : 'left') : null;
-    return {kind:'word', word:index, slot, paired};
+    return withEntryCoordinates({kind:'word',word:index,slot,paired});
   }
 
   function workBaselineBottomForWord(index){
@@ -2441,22 +2809,24 @@
     return el ? rectInWorkspace(el) : fallbackRect;
   }
 
-  function drawGroups(forcedDownGroups=new Set()){
-    groupLayer.innerHTML = '';
+  function drawGroups(sentenceState,forcedDownGroups=new Set(),{append=false}={}){
+    if(!sentenceState) return;
+    if(!append) groupLayer.innerHTML = '';
     groupLayer.style.width = `${Math.max(workspace.scrollWidth, workspace.clientWidth)}px`;
     groupLayer.style.height = `${Math.max(workspace.scrollHeight, workspace.clientHeight)}px`;
 
-    const displayJson=displayJsonRepresentation();
-    const displayLayouts=displayLayoutMap(displayJson);
+    const sentenceGroups=sentenceState.groups;
+    const displayJson={display:{groupLineStep:27}};
+    const displayLayouts=sentenceDisplayLayoutMap(sentenceState);
     const levels=new Map([...displayLayouts].map(([id,layout]) => [id,layout.level]));
-    const drawOrder = groups.slice().sort((a,b) =>
+    const drawOrder = sentenceGroups.slice().sort((a,b) =>
       (displayLayouts.get(a.id)?.primitiveSlots.length || 0)
       - (displayLayouts.get(b.id)?.primitiveSlots.length || 0)
       || (levels.get(a.id) || 0) - (levels.get(b.id) || 0)
       || a.id - b.id
     );
 
-    const allDisplayRects = () => selectionDisplayOrder()
+    const allDisplayRects = () => selectionDisplayOrder(sentenceState)
       .map(ref => {
         const el = getDisplayElement(ref);
         if(!el) return null;
@@ -2465,12 +2835,13 @@
       .filter(Boolean);
 
     const displayRects = allDisplayRects();
-    const displaySegments=new Map(groups.map(g => [
+    const navigationLeaves=navigationLeafRefs(sentenceState);
+    const displaySegments=new Map(sentenceGroups.map(g => [
       g.id,
       underlineSegmentsForGroup(g,displayLayouts.get(g.id))
     ]));
     const cursorBottoms=new Map();
-    const intrinsicBottoms = new Map(groups.map(g => {
+    const intrinsicBottoms = new Map(sentenceGroups.map(g => {
       const bottoms=[];
       const cursorVisualBottoms=[];
       const segments=displaySegments.get(g.id) || [];
@@ -2497,7 +2868,7 @@
 
     const groupLineStep=displayJson.display.groupLineStep;
     const underlineYByGroup=new Map();
-    for(const g of groups.slice().sort((a,b) =>
+    for(const g of sentenceGroups.slice().sort((a,b) =>
       (levels.get(a.id) || 0) - (levels.get(b.id) || 0) || a.id - b.id
     )){
       const staticY=(intrinsicBottoms.get(g.id) || 0) + 1
@@ -2522,6 +2893,13 @@
         const seg=underlineSegments[segmentIndex];
         const sr=segmentRange(seg);
         if(!sr) continue;
+        const segmentLeafRefs=navigationLeaves.filter(ref => refInsideSegment(ref,seg));
+        const segmentColumns=segmentLeafRefs
+          .map(ref => navigationXForLeafRef(ref))
+          .filter(Number.isFinite);
+        const segmentHasGroupCursor=groupCursorId===g.id
+          && groupCursorTarget==='underline'
+          && segmentColumns.includes(navigationCursor.x);
 
         const rects=[];
         for(let i=sr.start;i<=sr.end;i++){
@@ -2612,7 +2990,7 @@
           const line=document.createElement('div');
           line.className='group-underline'
             + groupSelectionClassNames({group:g.id,slot:null})
-            + (groupCursorId===g.id && groupCursorTarget==='underline'
+            + (segmentHasGroupCursor
               && gapTokenCursor===null && !gapMode && !groupSelection ? ' group-underline-cursor' : '');
           applySlotGeometry(line, {group:g.id,slot:null}, {
             availableWidth:Math.max(1,last.right-first.left),
@@ -2624,7 +3002,14 @@
           line.dataset.groupSegment=String(segmentIndex);
           line.addEventListener('click',(ev)=>{
             ev.stopPropagation();
+            const selectedX=navigationColumnClosestToClientX(segmentLeafRefs,ev.clientX)
+              ?? segmentColumns[0]
+              ?? navigationCursor.x;
             setGroupCursor(g.id, ensureGroupVerbal(g).on ? 'left' : 'underline');
+            setLogicalCursorForRef(
+              {group:g.id,slot:ensureGroupVerbal(g).on ? 'left' : null},
+              selectedX
+            );
             groupSelection=null;
             arrowDraft=null;
             render();
@@ -2784,7 +3169,7 @@
     const target=horizontalMoveTarget(delta < 0 ? 'left' : 'right');
     const candidate=horizontalTargetRef(target);
     if(!candidate) return;
-    rememberHorizontalColumn(target);
+    rememberHorizontalCursor(target);
     const origin=groupSelection.path?.[0] || groupSelection.paths?.[0]?.[0];
     if(!sameSentenceRefs(origin, candidate)) return;
     const selectedGroup=target.kind === 'group' ? groupById(target.group) : null;
@@ -2918,6 +3303,7 @@
     if(target){
       cursor = target.word;
       cursorSlot = target.slot;
+      setLogicalCursorForRef({word:target.word,slot:target.slot});
     }
     render();
     return true;
@@ -2949,6 +3335,7 @@
         next.groupCursorTarget=null;
       }
     });
+    if(ch === '[') setLogicalCursorForRef(boundaryRef(i,boundaryIndex));
     render();
     pushMarkUndo(historyBefore);
   }
@@ -3029,7 +3416,7 @@
       next.boundaryCursor=null;
     });
     if(target){
-      rememberHorizontalColumn(target);
+      rememberHorizontalCursor(target);
       selectHorizontalTarget(target);
     }else{
       render();
@@ -3085,7 +3472,7 @@
     pushMarkUndo(historyBefore);
   }
 
-  function currentDisplayRef(){
+  function legacyCurrentDisplayRef(){
     if(boundaryCursor != null && boundaryAtRef(boundaryCursor)?.slot) return cloneRef(boundaryCursor);
     if(gapTokenCursor != null && pseudoAtRef(gapTokenCursor)) return cloneRef(gapTokenCursor);
     if(tokens.length === 0 || cursor >= tokens.length) return null;
@@ -3100,6 +3487,110 @@
       word: cursor,
       slot: (verbals[cursor]?.on || slotIsDouble(cursor)) ? cursorSlot : null
     };
+  }
+
+  function logicalNavigationCells(){
+    const sentenceState=currentSentenceProcessingState();
+    return buildLogicalNavigationCells(
+      sentenceState,
+      sentenceDisplayLayoutMap(sentenceState),
+      navigationLeafRefs(sentenceState)
+    );
+  }
+
+  function navigationCellForCursor(cells=logicalNavigationCells()){
+    return logicalCursorCell(cells);
+  }
+
+  function setLogicalCursorForRef(ref,preferredX=null,cells=logicalNavigationCells()){
+    const matches=cells.filter(cell => sameDisplayRef(cell.semanticRef,ref));
+    if(!matches.length) return null;
+    const requestedX=Number(preferredX);
+    const currentX=Number(navigationCursor.x);
+    const cell=(Number.isFinite(requestedX)
+      ? matches.find(candidate => candidate.columns.includes(requestedX))
+      : null)
+      || (Number.isFinite(currentX)
+        ? matches.find(candidate => candidate.columns.includes(currentX))
+        : null)
+      || matches[0];
+    const x=Number.isFinite(requestedX) && cell.columns.includes(requestedX)
+      ? requestedX
+      : (Number.isFinite(currentX) && cell.columns.includes(currentX)
+        ? currentX
+        : cell.colIdx);
+    navigationCursor={x,y:cell.logicalRowIdx};
+    return cell;
+  }
+
+  function initializeOrRepairNavigationCursor(){
+    const cells=logicalNavigationCells();
+    if(!cells.length){
+      navigationCursor={x:null,y:null};
+      return null;
+    }
+    let cell=navigationCellForCursor(cells);
+    if(cell) return cell;
+
+    if(navigationCursor.x == null || navigationCursor.y == null){
+      const legacyRef=legacyCurrentDisplayRef();
+      const matches=cells.filter(candidate => sameDisplayRef(candidate.semanticRef,legacyRef));
+      cell=matches.find(candidate => candidate.columns.includes(navigationCursor.x)) || matches[0] || null;
+    }
+    if(!cell && Number.isFinite(navigationCursor.x)){
+      const sameX=cells.filter(candidate =>
+        candidate.columns.includes(navigationCursor.x)
+        && candidate.logicalRowIdx <= Number(navigationCursor.y)
+      ).sort((left,right) => right.logicalRowIdx-left.logicalRowIdx);
+      cell=sameX[0] || null;
+    }
+    if(!cell){
+      const atomic=cells.filter(candidate => candidate.logicalRowIdx === 1)
+        .sort((left,right) =>
+          Math.abs(left.colIdx-Number(navigationCursor.x || 0))-Math.abs(right.colIdx-Number(navigationCursor.x || 0))
+        );
+      cell=atomic[0] || cells[0];
+    }
+    navigationCursor={x:cell.colIdx,y:cell.logicalRowIdx};
+    return cell;
+  }
+
+  function syncLegacyCursorCacheFromLogical(){
+    const cell=initializeOrRepairNavigationCursor();
+    if(!cell) return null;
+    const ref=cell.semanticRef;
+    const previousGroupId=groupCursorId;
+    const previousGroupTarget=groupCursorTarget;
+    boundaryCursor=null;
+    gapTokenCursor=null;
+    clearGroupCursor();
+    if(ref.boundary != null){
+      boundaryCursor=cloneRef(ref);
+    }else if(ref.gapToken != null){
+      gapTokenCursor=cloneRef(ref);
+    }else if(ref.group != null){
+      const g=groupById(ref.group);
+      groupCursorId=ref.group;
+      groupCursorSlot=ref.slot || null;
+      // underline/標識の見せ方だけは描画互換cacheとして維持できる。
+      // 現在位置の解決や移動判定には一切使わない。
+      groupCursorTarget=ref.slot || (
+        previousGroupId === ref.group
+        && (previousGroupTarget === 'single' || previousGroupTarget === 'underline')
+          ? previousGroupTarget
+          : (g?.mark ? 'single' : 'underline')
+      );
+      cursor=g?.start ?? cursor;
+      cursorSlot=null;
+    }else if(ref.word != null){
+      cursor=ref.word;
+      cursorSlot=ref.slot || null;
+    }
+    return cell;
+  }
+
+  function currentDisplayRef(){
+    return cloneRef(navigationCellForCursor()?.semanticRef || initializeOrRepairNavigationCursor()?.semanticRef);
   }
 
   function sameDisplayRef(a, b){
@@ -3542,8 +4033,9 @@
     );
   }
 
-  function arrowUnderlineObstacles(){
+  function arrowUnderlineObstacles(sentenceState=null){
     return [...groupLayer.querySelectorAll('.group-underline[data-group-underline]')]
+      .filter(line => !sentenceState || sentenceState.groupIds.has(Number(line.dataset.groupUnderline)))
       .map(line => {
         const group=Number(line.dataset.groupUnderline);
         const lineRect=rectInWorkspace(line);
@@ -3716,13 +4208,13 @@
     );
   }
 
-  function arrowLayoutsForRendering(){
-    const layouts = arrows.map(arrow => makeArrowLayout(arrow.from, arrow.to)).filter(Boolean);
-    const obstacles=arrowUnderlineObstacles();
+  function arrowLayoutsForRendering(sentenceState=currentSentenceProcessingState()){
+    const layouts = (sentenceState?.arrows || []).map(arrow => makeArrowLayout(arrow.from, arrow.to)).filter(Boolean);
+    const obstacles=arrowUnderlineObstacles(sentenceState);
     assignArrowLevels(layouts,obstacles);
 
     let previewLayout = null;
-    if(arrowDraft){
+    if(arrowDraft && sentenceOfRef(arrowDraft) === sentenceState?.index){
       const to = currentDisplayRef();
       if(to && !sameDisplayRef(arrowDraft, to) && sameSentenceRefs(arrowDraft, to)){
         previewLayout = makeArrowLayout(arrowDraft, to);
@@ -3807,41 +4299,83 @@
   }
 
   function arrowCrossedGroupIds(){
-    const {visibleLayouts} = arrowLayoutsForRendering();
-    if(!visibleLayouts.length) return new Set();
-
-    const slots = [...groupLayer.querySelectorAll(
-      '.group-mark[data-group-work], .group-verbal-left[data-group-work], .group-verbal-right[data-group-work]'
-    )]
-      .filter(el => el.textContent.trim() && getComputedStyle(el).visibility !== 'hidden')
-      .map(el => ({
-        group:Number(el.dataset.groupWork),
-        ref:{
-          group:Number(el.dataset.groupWork),
-          slot:el.dataset.groupSlot === 'single' ? null : el.dataset.groupSlot
-        },
-        rect:textCollisionRect(el)
-      }))
-      .filter(slot => slot.rect);
-
     const crossed = new Set();
-    for(const layout of visibleLayouts){
-      const segments = arrowLayoutSegments(layout);
-      for(const slot of slots){
-        if(sameDisplayRef(slot.ref, layout.from) || sameDisplayRef(slot.ref, layout.to)) continue;
-        if(segments.some(segment => segmentIntersectsRect(segment, slot.rect))){
-          crossed.add(slot.group);
+    for(const sentenceState of sentenceProcessingStates()){
+      const {visibleLayouts}=arrowLayoutsForRendering(sentenceState);
+      if(!visibleLayouts.length) continue;
+      const slots=[...groupLayer.querySelectorAll(
+        '.group-mark[data-group-work], .group-verbal-left[data-group-work], .group-verbal-right[data-group-work]'
+      )]
+        .filter(el => sentenceState.groupIds.has(Number(el.dataset.groupWork)))
+        .filter(el => el.textContent.trim() && getComputedStyle(el).visibility !== 'hidden')
+        .map(el => ({
+          group:Number(el.dataset.groupWork),
+          ref:{
+            group:Number(el.dataset.groupWork),
+            slot:el.dataset.groupSlot === 'single' ? null : el.dataset.groupSlot
+          },
+          rect:textCollisionRect(el)
+        }))
+        .filter(slot => slot.rect);
+      for(const layout of visibleLayouts){
+        const segments = arrowLayoutSegments(layout);
+        for(const slot of slots){
+          if(sameDisplayRef(slot.ref, layout.from) || sameDisplayRef(slot.ref, layout.to)) continue;
+          if(segments.some(segment => segmentIntersectsRect(segment, slot.rect))){
+            crossed.add(slot.group);
+          }
         }
       }
     }
     return crossed;
   }
 
+  function renderedGroupTopById(){
+    const tops=new Map();
+    for(const line of groupLayer.querySelectorAll('.group-underline[data-group-underline]')){
+      const id=Number(line.dataset.groupUnderline);
+      const top=rectInWorkspace(line).top;
+      if(!Number.isFinite(id) || !Number.isFinite(top)) continue;
+      tops.set(id,Math.min(tops.get(id) ?? Infinity,top));
+    }
+    return tops;
+  }
+
+  function arrowAvoidanceRowOffsets(before,after){
+    const step=displayJsonRepresentation().display.groupLineStep;
+    const offsets=new Map();
+    if(!Number.isFinite(step) || step <= 0) return offsets;
+    for(const [id,afterTop] of after){
+      const beforeTop=before.get(id);
+      if(!Number.isFinite(beforeTop)) continue;
+      const rows=Math.max(0,Math.round((afterTop-beforeTop)/step));
+      if(rows) offsets.set(id,rows);
+    }
+    return offsets;
+  }
+
+  function drawAllSentenceGroups(forcedDownGroups=new Set()){
+    const states=sentenceProcessingStates();
+    if(!states.length){
+      groupLayer.innerHTML='';
+      return;
+    }
+    states.forEach((sentenceState,index) => {
+      drawGroups(sentenceState,forcedDownGroups,{append:index > 0});
+    });
+  }
+
   function drawDisplayOverlays(){
-    drawGroups();
+    drawAllSentenceGroups();
+    const beforeArrowAvoidance=renderedGroupTopById();
     const pushedGroups = arrowCrossedGroupIds();
-    if(pushedGroups.size) drawGroups(pushedGroups);
+    if(pushedGroups.size) drawAllSentenceGroups(pushedGroups);
+    navigationArrowRowOffsets=arrowAvoidanceRowOffsets(
+      beforeArrowAvoidance,
+      renderedGroupTopById()
+    );
     drawArrows();
+    rebuildNavigationGridSnapshot();
   }
 
   function drawArrows(){
@@ -3877,10 +4411,11 @@
     defs.append(marker, previewMarker);
     arrowLayer.appendChild(defs);
 
-    const {layouts, previewLayout} = arrowLayoutsForRendering();
-
-    for(const layout of layouts) drawArrowLayout(layout, false);
-    if(previewLayout) drawArrowLayout(previewLayout, true);
+    for(const sentenceState of sentenceProcessingStates()){
+      const {layouts, previewLayout} = arrowLayoutsForRendering(sentenceState);
+      for(const layout of layouts) drawArrowLayout(layout, false);
+      if(previewLayout) drawArrowLayout(previewLayout, true);
+    }
   }
   function setMode(nextMode){
     applyEditorTransition(next => {
@@ -4041,6 +4576,7 @@
         next.pendingRef=null;
       });
       refreshWorkSlotEnabled();
+      setLogicalCursorForRef({group:selectedId,slot:'left'});
       render();
       pushMarkUndo(historyBefore);
       return;
@@ -4098,6 +4634,7 @@
         refreshWorkSlotEnabled();
         groupCursorSlot = null;
         groupCursorTarget = g.mark ? 'single' : 'underline';
+        setLogicalCursorForRef({group:g.id,slot:null});
         render();
         pushMarkUndo(historyBefore);
       }else{
@@ -4491,23 +5028,56 @@
     const item=edge === 'start' ? items[0] : items.at(-1);
     const target=horizontalTargetFromSequenceItem(item,edge === 'start' ? 'right' : 'left');
     if(!target) return false;
-    rememberHorizontalColumn(target);
+    rememberHorizontalCursor(target);
     selectHorizontalTarget(target);
     return true;
   }
 
   function horizontalMoveTarget(direction){
-    const current=horizontalCurrentTarget();
+    const logicalRef=currentDisplayRef();
+    const current=logicalRef ? horizontalTargetFromRef(logicalRef) : horizontalCurrentTarget();
     if(!current) return null;
+    const sentenceState=currentSentenceProcessingState();
+    const sentenceSequence=tokenSequenceForSentence(sentenceState);
+
+    // h/l はキー入力開始時の一枚のsnapshotだけを用いる。再描画で変わった
+    // display_y が同じ入力の判定へ逆流しないよう、ここで移動先を確定する。
+    const snapshot=navigationGridSnapshot || rebuildNavigationGridSnapshot();
+    const snapshotCurrentCell=logicalCursorCell(snapshot.cells);
+    if(snapshotCurrentCell){
+      const regionTarget=Core.calculateRegionHorizontalTarget({
+        direction,
+        current:{...snapshotCurrentCell,colIdx:navigationCursor.x},
+        candidates:snapshot.cells,
+        xAxis:snapshot.xAxis
+      });
+      if(regionTarget?.ref){
+        const target=horizontalTargetFromRef(regionTarget.ref);
+        if(target){
+          const splitGroup=target.kind === 'group' && !target.paired
+            && snapshot.cells.filter(cell => sameDisplayRef(cell.semanticRef,regionTarget.ref)).length > 1;
+          return {
+            ...target,
+            target:splitGroup ? 'underline' : target.target,
+            navigationX:regionTarget.colIdx,
+            navigationY:regionTarget.logicalRowIdx
+          };
+        }
+      }
+      // The sentence-local logical grid is authoritative. If it has no cell
+      // beyond the current region, this is the line edge; legacy flattened
+      // ordering must not leak into the adjacent sentence.
+      return null;
+    }
 
     if(current.kind === 'boundary'){
-      const order=flattenedDisplayOrder();
+      const order=flattenedDisplayOrder().filter(ref => sentenceOfRef(ref) === sentenceState?.index);
       const index=order.findIndex(ref => sameDisplayRef(ref,current));
       return horizontalTargetFromRef(order[index+(direction === 'left' ? -1 : 1)]);
     }
 
     if(current.kind === 'gap-token'){
-      const adjacent=tokenSequenceNeighborItem(current,direction);
+      const adjacent=tokenSequenceNeighborItem(current,direction,sentenceSequence);
       return horizontalTargetFromSequenceItem(adjacent,direction);
     }
 
@@ -4520,12 +5090,35 @@
       });
     }
 
-    const layouts=groupDisplayLayoutMap();
+    const layouts=sentenceDisplayLayoutMap(sentenceState);
     const currentRef=current.kind === 'group'
       ? {group:current.group,slot:current.slot}
       : {word:current.word,slot:current.slot};
+    if(current.kind === 'group'){
+      const leafRefs=navigationLeafRefs(sentenceState);
+      const currentCell=navigationCellForRef(currentRef,layouts,leafRefs);
+      if(currentCell){
+        const anchor=currentCell.columns.includes(navigationCursor.x)
+          ? navigationCursor.x
+          : currentCell.colIdx;
+        const regionTarget=Core.calculateRegionHorizontalTarget({
+          direction,
+          current:{...currentCell,colIdx:anchor},
+          candidates:navigationCandidateCells(layouts,leafRefs,sentenceState),
+          xAxis:navigationGridSnapshot?.xAxis || navigationLeafXAxis(sentenceState)
+        });
+        if(regionTarget?.ref){
+          const target=horizontalTargetFromRef(regionTarget.ref);
+          if(target) return {
+            ...target,
+            navigationX:regionTarget.colIdx,
+            navigationY:regionTarget.logicalRowIdx
+          };
+        }
+      }
+    }
     if(current.kind === 'word'){
-      const adjacent=tokenSequenceNeighborItem(current,direction);
+      const adjacent=tokenSequenceNeighborItem(current,direction,sentenceSequence);
       const movingInsidePair=current.paired && (
         (direction === 'right' && current.slot === 'left')
         || (direction === 'left' && current.slot === 'right')
@@ -4553,10 +5146,10 @@
       }
     }else if(current.kind === 'group'){
       const group=groupById(current.group);
-      const adjacent=tokenSequenceNeighborOfRefs(groupLeafRefs(group,layouts),direction);
+      const adjacent=tokenSequenceNeighborOfRefs(groupLeafRefs(group,layouts),direction,sentenceSequence);
       if(adjacent?.kind === 'pseudo-token') return horizontalTargetFromSequenceItem(adjacent,direction);
     }
-    const leafRefs=navigationLeafRefs();
+    const leafRefs=navigationLeafRefs(sentenceState);
     const currentCell=navigationCellForRef(currentRef,layouts,leafRefs);
     const directContexts=groups
       .map(group => ({
@@ -4646,9 +5239,13 @@
       : {word:target.word, slot:target.slot};
   }
 
-  function rememberHorizontalColumn(target){
+  function rememberHorizontalCursor(target){
+    if(Number.isFinite(Number(target?.navigationX)) && Number.isFinite(Number(target?.navigationY))){
+      navigationCursor={x:Number(target.navigationX),y:Number(target.navigationY)};
+      return;
+    }
     const cell=navigationCellForRef(horizontalTargetRef(target));
-    if(cell) navigationColIdx=cell.colIdx;
+    if(cell) navigationCursor={x:cell.colIdx,y:cell.logicalRowIdx};
   }
 
   function selectHorizontalTarget(target){
@@ -4724,6 +5321,8 @@
       cursorSlot = null;
     }
 
+    setLogicalCursorForRef({word:cursor,slot:cursorSlot});
+
     render();
 
     const target = cursorSlot
@@ -4735,11 +5334,17 @@
   // カーソル移動の唯一の入口。NORMAL / r終点選択 / V部分確定後の移動は全てここを通す.
   // direction: 'left' | 'right' | 'down' | 'up'
   function moveCursor(direction){
+    // 移動処理は毎回、正本の論理座標から描画互換cacheを一方向に再生成する。
+    syncLegacyCursorCacheFromLogical();
     if(direction === 'left' || direction === 'right'){
       const target=horizontalMoveTarget(direction);
       if(target){
-        rememberHorizontalColumn(target);
+        rememberHorizontalCursor(target);
         selectHorizontalTarget(target);
+      }else if(!groupSelection){
+        // Sentence-local h/l finishes first. Only its explicit document-shell
+        // adapter may cross a newline.
+        moveToAdjacentSentenceEdge(direction === 'right' ? 1 : -1);
       }
       return;
     }
@@ -4749,9 +5354,9 @@
       return moveToAdjacentSentence(direction === 'down' ? 1 : -1);
     };
 
-    if(navigationColIdx === null){
+    if(navigationCursor.x === null || navigationCursor.y === null){
       const cell=navigationCellForRef(currentDisplayRef());
-      if(cell) navigationColIdx=cell.colIdx;
+      if(cell) navigationCursor={x:cell.colIdx,y:cell.logicalRowIdx};
     }
 
     const delta = direction === 'up' ? -1 : 1;
@@ -4819,16 +5424,19 @@
             return;
           }
 
-          const layouts=groupDisplayLayoutMap();
-          const leafRefs=navigationLeafRefs();
+          const sentenceState=currentSentenceProcessingState();
+          const layouts=sentenceDisplayLayoutMap(sentenceState);
+          const leafRefs=navigationLeafRefs(sentenceState);
           const currentCell=navigationCellForRef({group:g.id,slot:groupCursorSlot},layouts,leafRefs);
-          if(navigationColIdx === null && currentCell) navigationColIdx=currentCell.colIdx;
+          if((navigationCursor.x === null || navigationCursor.y === null) && currentCell){
+            navigationCursor={x:currentCell.colIdx,y:currentCell.logicalRowIdx};
+          }
           const candidates=(g.members || []).map(ref => {
             const cell=navigationCellForRef(ref,layouts,leafRefs);
             return cell ? {ref:cloneRef(ref),columns:cell.columns} : null;
           }).filter(Boolean);
           const target=Core.calculateColumnPreservingTarget({
-            column:navigationColIdx,
+            column:navigationCursor.x,
             candidates
           });
           if(target?.ref) selectDisplayRef(target.ref);
@@ -4839,12 +5447,13 @@
 
   function groupLogicalSpan(g){
     if(!g) return Infinity;
-    return groupDisplayLayoutMap().get(g.id)?.primitiveSlots.length ?? Infinity;
+    const sentenceState=sentenceProcessingState(sentenceOfRef({group:g.id,slot:null}));
+    return sentenceDisplayLayoutMap(sentenceState).get(g.id)?.primitiveSlots.length ?? Infinity;
   }
 
   function groupsContainingRef(ref, exceptGroupId = null){
     if(!ref) return [];
-    const layouts=groupDisplayLayoutMap();
+    const layouts=sentenceDisplayLayoutMap(sentenceProcessingState(sentenceOfRef(ref)));
     const child=ref.group != null ? groups.find(g => g.id === ref.group) : null;
     return groups
       .filter(g => g.id !== exceptGroupId && (
@@ -4861,13 +5470,14 @@
 
   function groupContainedBy(inner, outer){
     if(!inner || !outer || inner.id===outer.id) return false;
-    return Boolean(groupDisplayLayoutMap().get(outer.id)?.contains.includes(inner.id));
+    const sentenceState=sentenceProcessingState(sentenceOfRef({group:outer.id,slot:null}));
+    return Boolean(sentenceDisplayLayoutMap(sentenceState).get(outer.id)?.contains.includes(inner.id));
   }
 
   function parentGroupOf(g){
     if(!g) return null;
     normalizeGroupRefs(g);
-    const layouts=groupDisplayLayoutMap();
+    const layouts=sentenceDisplayLayoutMap(sentenceProcessingState(sentenceOfRef({group:g.id,slot:null})));
     return groups
       .filter(other => groupContainedBy(g, other))
       .sort((a,b) =>
@@ -4882,6 +5492,7 @@
     if(ref.gapToken != null){
       if(!pseudoAtRef(ref)) return false;
       gapTokenCursor=cloneRef(ref);
+      setLogicalCursorForRef(ref);
       clearGroupCursor();
       render();
       requestAnimationFrame(() => {
@@ -4904,14 +5515,12 @@
     return true;
   }
 
-  function displayRefsInSentence(sentenceIndex){
-    const range = sentenceRanges.find(r => r.index === sentenceIndex);
-    if(!range || range.start >= range.end) return [];
+  function displayRefsInSentence(sentenceState){
+    const range=sentenceState?.range;
+    if(!sentenceState || !range || range.start >= range.end) return [];
     const refs = [];
 
-    for(const item of tokenSequence()){
-      const itemRef=tokenSequenceItemRef(item);
-      if(sentenceOfRef(itemRef) !== sentenceIndex) continue;
+    for(const item of tokenSequenceForSentence(sentenceState)){
       for(const ref of tokenSequenceItemRefs(item)){
         if(isValidDisplayRef(ref) && getDisplayElement(ref)) refs.push(ref);
       }
@@ -4919,8 +5528,7 @@
 
     // 語のslotが外側Tによって隠れている場合も、実際に表示されている
     // group側のslotを行移動の候補にする。
-    for(const g of groups){
-      if(sentenceOfRef(groupSegments(g)[0]?.startRef) !== sentenceIndex) continue;
+    for(const g of sentenceState.groups){
       const gv = ensureGroupVerbal(g);
       if(gv.on){
         for(const side of ['left','right']){
@@ -4941,20 +5549,24 @@
     if(currentSentence < 0 && cursor < tokens.length) currentSentence = sentenceOfWord(cursor);
     if(currentSentence < 0) return false;
 
-    const currentEl = getDisplayElement(currentRef);
-    const currentX = currentEl ? rectInWorkspace(currentEl).cx : null;
+    const currentX=Number(navigationCursor.x);
 
     for(let si = currentSentence + delta; si >= 0 && si < sentenceRanges.length; si += delta){
-      const refs = displayRefsInSentence(si);
+      const targetSentence=sentenceProcessingState(si);
+      const refs = displayRefsInSentence(targetSentence);
       if(!refs.length) continue;
 
       let target = refs[0];
-      if(currentX != null){
+      if(Number.isFinite(currentX)){
         let bestDistance = Infinity;
         for(const ref of refs){
-          const el = getDisplayElement(ref);
-          if(!el) continue;
-          const distance = Math.abs(rectInWorkspace(el).cx - currentX);
+          const cell=navigationCellForRef(
+            ref,
+            sentenceDisplayLayoutMap(targetSentence),
+            navigationLeafRefs(targetSentence)
+          );
+          if(!cell) continue;
+          const distance=Math.min(...cell.columns.map(x => Math.abs(x-currentX)));
           if(distance < bestDistance){
             bestDistance = distance;
             target = ref;
@@ -4962,6 +5574,26 @@
         }
       }
       return selectDisplayRef(target);
+    }
+    return false;
+  }
+
+  function moveToAdjacentSentenceEdge(delta){
+    const currentRef=currentDisplayRef();
+    let currentSentence=sentenceOfRef(currentRef);
+    if(currentSentence < 0 && cursor < tokens.length) currentSentence=sentenceOfWord(cursor);
+    if(currentSentence < 0) return false;
+    for(let index=currentSentence+delta;index>=0 && index<sentenceRanges.length;index+=delta){
+      const targetSentence=sentenceProcessingState(index);
+      const items=tokenSequenceForSentence(targetSentence);
+      if(!items.length) continue;
+      const item=delta < 0 ? items.at(-1) : items[0];
+      const edgeRefs=tokenSequenceItemRefs(item);
+      const edgeRef=delta < 0 ? edgeRefs.at(-1) : edgeRefs[0];
+      const target=horizontalTargetFromRef(edgeRef);
+      if(!target) continue;
+      rememberHorizontalCursor(target);
+      return selectHorizontalTarget(target);
     }
     return false;
   }
@@ -5630,12 +6262,39 @@
   workspace.addEventListener('scroll', () => requestAnimationFrame(drawDisplayOverlays));
 
   window.KiriEditorData=Object.freeze({
+    model:window.KiriEditorModel,
     getInnerJson:innerJsonRepresentation,
     getDisplayJson:displayJsonRepresentation,
+    getNavigationSnapshot:() => navigationGridSnapshot
+      ? JSON.parse(JSON.stringify(navigationGridSnapshot))
+      : null,
+    getSentenceProcessingSnapshot:() => ({
+      sentenceCount:sentenceProcessingStates().length,
+      activeSentenceIndex:currentSentenceProcessingState()?.index ?? -1,
+      sentences:sentenceProcessingStates().map(state => ({
+        index:state.index,
+        wordOffset:state.wordOffset,
+        tokenCount:state.tokens.length,
+        groupIds:[...state.groupIds],
+        arrowCount:state.arrows.length
+      }))
+    }),
     loadInnerJson:loadInnerJsonRepresentation,
     saveLocal:saveInnerJsonToLocalStorage,
     deleteLocalSave:deleteInnerJsonFromLocalStorage,
     storageKey:LOCAL_STORAGE_KEY
+  });
+
+  window.KiriEditorTesting=Object.freeze({
+    setLegacyCursorCache(values={}){
+      if(Object.hasOwn(values,'cursor')) cursor=Number(values.cursor);
+      if(Object.hasOwn(values,'cursorSlot')) cursorSlot=values.cursorSlot;
+      if(Object.hasOwn(values,'groupCursorId')) groupCursorId=values.groupCursorId;
+      if(Object.hasOwn(values,'groupCursorSlot')) groupCursorSlot=values.groupCursorSlot;
+      if(Object.hasOwn(values,'groupCursorTarget')) groupCursorTarget=values.groupCursorTarget;
+      if(Object.hasOwn(values,'gapTokenCursor')) gapTokenCursor=cloneRef(values.gapTokenCursor);
+      if(Object.hasOwn(values,'boundaryCursor')) boundaryCursor=cloneRef(values.boundaryCursor);
+    }
   });
 
   if(!restoreInnerJsonFromLocalStorage()) syncFromInput();

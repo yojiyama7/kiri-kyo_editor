@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-08-18",
+  "updated": "2026-08-21",
   "rules": [
     {"id":"IN-01","domain":"input","decision":"tokenization","when":{},"outcome":"whitespace","text":"入力テキストを空白区切りでtoken化する。"},
     {"id":"IN-02","domain":"input","decision":"sentence-boundary","when":{},"outcome":"newline","text":"改行を文境界として扱う。"},
@@ -19,6 +19,7 @@
     {"id":"SL-09","domain":"slot","decision":"geometry-border","when":{"cursor-kind":["normal","selection","fixed"]},"outcome":"visible-2px","text":"青、灰、オレンジの全slotカーソルに2pxの可視borderを表示する。"},
     {"id":"SL-10","domain":"slot","decision":"geometry-exclusion","when":{"kind":["BORDER-position-cursor","dummy"]},"outcome":"not-slot-geometry","text":"BORDER位置カーソルと文末dummyはslot geometryの対象外とする。"},
     {"id":"SL-11","domain":"slot","decision":"cursor-count","when":{"mode":"NORMAL"},"outcome":"one-blue","text":"通常青カーソルは常に1つだけ表示する。"},
+    {"id":"SL-12","domain":"slot","decision":"typed-T-pre-slot","when":{"model":"SentenceState"},"outcome":"atomic-only","text":"TSlotのpre_slotとpost_slotは必ずAtomicSlotとし、DoubleSlotをpre_slotへ格納しない。"},
 
     {"id":"SQ-01","domain":"sequence","decision":"surface-order-source","when":{},"outcome":"createTokenSequence","text":"通常tokenと疑似tokenの表面順はcreateTokenSequenceを正本とする。"},
     {"id":"SQ-02","domain":"sequence","decision":"surface-elements","when":{},"outcome":"token-or-pseudo-token","text":"共通列の要素はtokenまたはpseudo-tokenとする。"},
@@ -86,8 +87,8 @@
 
     {"id":"MV-01","domain":"movement","decision":"horizontal-engine","when":{"mode":["NORMAL","V"]},"outcome":"shared-target-calculation","text":"NORMALとV選択中のh/lは同じ移動先計算を使う。"},
     {"id":"MV-02","domain":"movement","decision":"grid-column","when":{"ref":"leaf-slot"},"outcome":"surface-leaf-index","text":"葉slot順をcol_idxとする。"},
-    {"id":"MV-03","domain":"movement","decision":"grid-column","when":{"ref":"multi-leaf-group-slot"},"outcome":"minimum-contained-column","text":"複数葉を含むgroup slotのcol_idxは最小包含列とする。"},
-    {"id":"MV-04","domain":"movement","decision":"horizontal-grid-choice","when":{},"outcome":"nearest-at-max-row-not-below-current","text":"h/lは方向側候補のうち現在row以下で最大rowの最寄りを選ぶ。"},
+    {"id":"MV-03","domain":"movement","decision":"grid-column","when":{"ref":"multi-leaf-group-slot"},"outcome":"active-region-anchor-column","text":"複数葉を含むgroup slotのcol_idxは、選択中region内で保持したatomic葉列を使う。"},
+    {"id":"MV-04","domain":"movement","decision":"horizontal-grid-choice","when":{},"outcome":"leave-current-region-then-max-row","text":"h/lは選択slotの現在regionを抜けるまでcol_idxを進め、最初の外部列で現在row以下の最大rowを選ぶ。"},
     {"id":"MV-05","domain":"movement","decision":"horizontal-entry-priority","when":{"case":"same-height-visible-adjacent-token"},"outcome":"token-slot","text":"隣group内tokenに実表示slotが同じ高さにあれば、直接兄弟groupよりtoken slotを優先する。"},
     {"id":"MV-06","domain":"movement","decision":"horizontal-entry-priority","when":{"case":"adjacent-empty-group"},"outcome":"group-self","text":"隣group内部が完全に空なら外からはgroup自身へ入る。"},
     {"id":"MV-07","domain":"movement","decision":"horizontal-entry-priority","when":{"case":"explicit-child-reference"},"outcome":"group-single-slot-even-empty","text":"同じ高さの実token候補がなく、明示的な非T子group参照を選ぶ場合は空でもsingle group slotを選ぶ。"},
@@ -108,6 +109,22 @@
     {"id":"MV-22","domain":"movement","decision":"line-edge","when":{"key":"$"},"outcome":"last-surface-on-current-line","text":"$は疑似tokenを含む現在行最後のsurfaceへ移る。"},
     {"id":"MV-23","domain":"movement","decision":"horizontal-entry-priority","when":{"case":"line-crossing-visible-boundary-token"},"outcome":"token-slot","text":"h/lで行境界を跨ぐとき、境界側tokenに実表示slotがあれば内包groupのslotよりtoken slotを優先する。"},
     {"id":"MV-24","domain":"movement","decision":"noncontiguous-gap-exit","when":{"current":"inner-edge-of-noncontiguous-segment","adjacent":"unselected-slot-in-gap"},"outcome":"adjacent-slot-even-empty","text":"非連続下線の区間内側端からh/lすると、別区間へ飛ばず隣接する未所属gap slotへ空でも移動する。"},
+    {"id":"MV-25","domain":"movement","decision":"split-group-cursor","when":{"group-regions":"multiple"},"outcome":"cursor-only-on-active-region","text":"分割groupのcursorは保持中col_idxを含むregionだけへ表示し、左右regionを区別する。"},
+    {"id":"MV-26","domain":"movement","decision":"split-group-entry","when":{"from":"external-atomic-slot","to":"multi-region-group"},"outcome":"preserve-arrival-column","text":"外部atomic slotから分割groupへ入るとき、group最小列ではなく移動で到達したatomic列を保持してregionを決める。"},
+    {"id":"MV-27","domain":"movement","decision":"horizontal-row-source","when":{"key":["h","l"]},"outcome":"derive-display-y-from-logical-grid","text":"h/lの比較にはDOMのpixel Yではなく、論理gridと段占有状態から導出したdisplay_yを使う。"},
+    {"id":"MV-28","domain":"movement","decision":"horizontal-snapshot-time","when":{"key":["h","l"]},"outcome":"freeze-until-target-commit","text":"1回のh/lは時刻tの表示gridを固定して行先を確定し、再描画後のgridは次の入力から使う。"},
+    {"id":"MV-29","domain":"movement","decision":"collapsed-candidate-tie","when":{"same-column":true,"same-display-row":true},"outcome":"visible-before-collapsed","text":"同じ列・表示段の可視候補と省略候補が競合するときは可視候補を選ぶ。"},
+    {"id":"MV-30","domain":"movement","decision":"cursor-coordinate-authority","when":{},"outcome":"logical-x-y-only","text":"現在位置の唯一の正本は省略前gridのcursor.x/yとし、semantic ref、旧cursor、region、display_y、DOM、pixel座標を正本として参照しない。"},
+    {"id":"MV-31","domain":"movement","decision":"logical-x","when":{"slot-kind":["atomic","double","T"]},"outcome":"integer-and-half-step","text":"表面要素は整数xを使い、Double/Tの左右だけをxとx+0.5にして後続整数xを振り直さない。"},
+    {"id":"MV-32","domain":"movement","decision":"logical-y","when":{},"outcome":"one-based-structural-row","text":"atomicをy=1、最内側groupをy=2、親groupを順にy=3以上とする。"},
+    {"id":"MV-33","domain":"movement","decision":"display-y-projection","when":{"cell":"atomic-or-group"},"outcome":"at-most-one-row-omission","text":"空atomicはdisplay_y=0、占有atomicは1、直下段が空のgroupはlogical_y-1、それ以外はlogical_yとし、省略を祖先へ累積しない。"},
+    {"id":"MV-34","domain":"movement","decision":"region-contiguity","when":{"group-regions":"multiple"},"outcome":"actual-x-axis-order","text":"分割regionの連続性は数値差ではなく実在x軸の昇順上で判定する。"},
+    {"id":"MV-35","domain":"movement","decision":"cursor-repair","when":{"cause":"selected-cell-removed"},"outcome":"same-x-lower-y-then-nearest-atomic","text":"構造編集でcellが消えた時だけ、同じxの旧y以下最大cell、なければ最寄りatomicへcursorを修復する。"},
+    {"id":"MV-36","domain":"movement","decision":"redraw-stability","when":{"event":["render","snapshot","resize","scroll"]},"outcome":"do-not-change-logical-cursor","text":"描画と表示snapshotの再生成はcursor.x/yを変更しない。"},
+    {"id":"MV-37","domain":"movement","decision":"display-y-arrow-avoidance","when":{"group-shift":"arrow-collision-avoidance"},"outcome":"add-rendered-row-offset","text":"矢印回避で実際に押し下がった離散段数をgroupのdisplay_yへ加え、論理yへは書き戻さない。"},
+    {"id":"MV-38","domain":"movement","decision":"sentence-local-grid","when":{"phase":"intra-sentence"},"outcome":"inspect-active-sentence-only","text":"文内移動のlogical gridとsnapshotは現在文のcellだけを走査する。"},
+    {"id":"MV-39","domain":"movement","decision":"cross-sentence-horizontal-adapter","when":{"key":["h","l"],"local-target":"none"},"outcome":"adjacent-sentence-surface-edge","text":"h/lは文内候補がない場合だけ行間adapterで前後文の表面端へ接続する。"},
+    {"id":"MV-40","domain":"movement","decision":"cross-sentence-vertical-adapter","when":{"key":["j","k"],"local-target":"none"},"outcome":"adjacent-sentence-nearest-logical-x","text":"j/kは文内構造候補がない場合だけ行間adapterで前後文の最寄り論理xへ接続する。"},
 
     {"id":"VS-01","domain":"V-selection","decision":"selection-source","when":{},"outcome":"visited-path","text":"V選択の正本は開始終了rangeではなく実際に通過したslot pathとする。"},
     {"id":"VS-02","domain":"V-selection","decision":"backtrack","when":{"candidate":"already-in-current-path"},"outcome":"truncate-to-candidate","text":"直前方向へ戻った場合はpathをその位置まで縮める。"},
@@ -142,7 +159,7 @@
     {"id":"JS-07","domain":"json","decision":"token-text-storage","when":{},"outcome":"top-level-text-only","text":"文とtoken文字列はトップレベルtextから復元し重複保存しない。"},
     {"id":"JS-08","domain":"json","decision":"empty-optional-fields","when":{"field":"optional-empty"},"outcome":"omit","text":"空の標識値以外の空構造・境界・矢印など任意フィールドは省略する。"},
     {"id":"JS-09","domain":"json","decision":"required-slot","when":{"slot":"required-even-empty"},"outcome":"retain","text":"tokenと疑似tokenの必須slotは内容が空でも保持する。"},
-    {"id":"JS-10","domain":"json","decision":"api-boundary","when":{},"outcome":"getInner-getDisplay-loadInner","text":"window.KiriEditorDataの3 APIを保存・表示・復元境界とする。"},
+    {"id":"JS-10","domain":"json","decision":"api-boundary","when":{},"outcome":"getInner-getDisplay-loadInner-getNavigationSnapshot","text":"window.KiriEditorDataの保存・表示・復元APIに加え、描画済みnavigation snapshotの診断用コピーを公開する。"},
 
     {"id":"KB-01","domain":"keyboard","decision":"mode-i","when":{"key":"i"},"outcome":"INSERT","text":"iでINSERTへ移行する。"},
     {"id":"KB-02","domain":"keyboard","decision":"mode-escape","when":{"key":"Escape"},"outcome":"NORMAL-or-cancel-pending","text":"EscapeでNORMALへ戻るか保留・選択をキャンセルする。"},
@@ -173,6 +190,9 @@
     {"id":"IM-05","domain":"implementation","decision":"render-order","when":{},"outcome":"DOM-then-underlines-then-arrows","text":"renderでDOMを再構築後、下線と矢印を描画する。"},
     {"id":"IM-06","domain":"implementation","decision":"text-sync-cleanup","when":{},"outcome":"drop-cross-sentence-and-invalid-arrows","text":"syncFromInputで文跨ぎgroupと不正矢印を除去する。"},
     {"id":"IM-07","domain":"implementation","decision":"enabled-cleanup-core","when":{},"outcome":"refreshEnabled-cleanupArrows","text":"enabled再計算と矢印整合性を純粋coreで処理する。"},
-    {"id":"IM-08","domain":"implementation","decision":"visual-verification","when":{"change":"geometry"},"outcome":"browser-test","text":"座標依存の表示変更は実ブラウザで検証する。"}
+    {"id":"IM-08","domain":"implementation","decision":"visual-verification","when":{"change":"geometry"},"outcome":"browser-test","text":"座標依存の表示変更は実ブラウザで検証する。"},
+    {"id":"IM-09","domain":"implementation","decision":"sentence-processing-boundary","when":{"concern":["layout","navigation","underline","arrow"]},"outcome":"accept-one-sentence-state","text":"layout・navigation・下線・矢印の処理関数は文書全体ではなく1つのsentence stateを受け取る。"},
+    {"id":"IM-10","domain":"implementation","decision":"sentence-group-ownership","when":{"group":"nested-or-not-normalized"},"outcome":"derive-recursively-from-members","text":"groupの所属文は描画segmentに依存せず保存membersを子groupまで再帰展開して決める。"},
+    {"id":"IM-11","domain":"implementation","decision":"cross-sentence-authority","when":{"operation":"movement"},"outcome":"document-shell-adapter-only","text":"文境界を跨ぐ移動を決められるのは文内処理ではなくdocument shellの行間adapterだけとする。"}
   ]
 }

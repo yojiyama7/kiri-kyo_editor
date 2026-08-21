@@ -47,6 +47,23 @@ active規則の完全な列挙は `llm/rules.json` を正本とし、`llm/rule-a
 - `arrowDraft`: 矢印作成中の始点
 - `markUndoStack`, `markRedoStack`: undo / redo 用履歴
 
+## 型付きSentenceStateモデル
+
+段階移行用の構造モデルを `editor-model.d.ts` と `editor-model.js` に分離している。
+
+- `editor-model.d.ts` は `Mark`, `SlotId`, `AtomicSlot`, `DoubleSlot`, `TSlot`, `Slot`, `WordSlot`, `UnderlineGroup`, `TokenId`, `Token`, `SentenceState` の型定義の正本。
+- `editor-model.js` はブラウザで同じモデルを検証する実行時層。`window.KiriEditorData.model` から参照できる。
+- `Mark`は既知literalと`string`のunionで、任意入力文字列も保持する。既知コード`o/c/con/pre/ap`はそれぞれ画面表示の`O/C/接/前/同格`へ対応する。
+- `createSentenceState()` は入力を検証して複製し、呼び出し元の値と状態を共有しない。
+- `validateSentenceState()` は非負整数ID、SlotIdの一意性、token record keyと`token.id`の一致、`token_chain`の完全性、groupの`child_ids`、cursorのSlotId参照を検査する。
+- `token_chain` は全tokenを重複なくちょうど1回含む。
+- composite slot自身と内部atomic slotは、それぞれ独立したSlotIdを持つ。
+- `TSlot.pre_slot`と`post_slot`は設計上どちらも必ず`AtomicSlot`であり、この不変条件を互換都合で拡張しない。`replaceWordSlotWithT()`はAtomicSlotだけをT化し、DoubleSlotは拒否する。`restoreWordSlotFromT()`はpre_slotをWordSlotへ戻す。
+- T解除時、T本体を参照していたgroup memberとcursorは復元slotへ移し、消滅する`post_slot`へのgroup参照は削除する。
+- underline groupのidentityは、そのgroupが持つ`slot.id`で表す。`child_ids`は既存のSlotIdだけを参照する。
+
+現行エディタには空slot、提示された`Mark`集合外の標識、表面単語、疑似token、境界、矢印、複数文がある。これらは提示された`SentenceState`だけでは損失なく表現できないため、現時点では既存のinner_jsonを置換せず、独立した構造モデル/APIとして導入する。保存形式の移行は不足フィールドの型を決めてから行う。
+
 ## Slot モデル
 
 通常 token の働きの標識は `workSlots[index]` に保持される。
@@ -291,6 +308,10 @@ inner_jsonの構造:
 
 - `editor-core.js` は DOM を参照しない functional core。状態を入力として受け取り、新しい状態を返す。
 - `index.html` は描画、イベント、フォーカス、スクロールと、core の返した状態を画面へ適用する imperative shell。
+- 文書全体は `splitSentenceStates()` で改行単位の `sentence_state` に分割する。各stateは文内token、境界・疑似token、group、矢印、global word offsetを持ち、layout・navigation・下線・矢印処理はこの1文stateを引数に取る。
+- groupの文所属は一時的な描画segmentではなく、保存されるmembersを子groupまで再帰展開して決める。矢印は両端が同じ文stateに属する場合だけそのstateへ入る。
+- logical navigation snapshotは現在文のcellだけを保持する。文数が増えても1回の文内移動で走査するcell数を文書全体のcell数へ比例させない。
+- `h/l` と `j/k` はまず現在文だけで移動先を決める。文内候補がない場合だけdocument shellの行間adapterを呼び、`h/l`は隣文の表面端、`j/k`は隣文の最も近い論理xへ接続する。V選択中は文境界を跨がない。
 - core の `evolve()` は入力を複製してから遷移を実行するため、呼び出し元の状態を変更しない。
 - 状態の UI への読み書きは `readEditorState()` / `writeEditorState()` に集約する。
 - 外部依存は見当たらない。
@@ -299,16 +320,19 @@ inner_jsonの構造:
 - `syncFromInput()` は入力編集後に構造を可能な限り保持しつつ、文境界を跨いだ group や不正矢印を除去する。
 - T 化・二重 slot 化・group 化は矢印の参照妥当性に影響する。変更時は `cleanupArrows()` の条件も確認する。
 - enabled の再計算と矢印整合性処理は pure core の `refreshEnabled()` / `cleanupArrows()` を使う。
-- 通常時とV選択中の `h` / `l` は同じ移動規則を使う。構造候補の比較はpure coreで行い、「実際に同じ表示高か」というDOM由来の候補情報だけをimperative shellから入力する。同じ表示高の隣tokenに実slotがあれば最初に選び、それがない場合に親groupの直接member、再帰的な葉slotを内側から外側のgroup順に探索する。葉探索では方向側に候補があれば空slotでも優先する。
-- 水平移動で隣tokenが別行に属する場合は、同じ高さの比較を行わず、その境界tokenに実表示slotがあれば直接選ぶ。実表示slotがない場合だけ通常のgroup入口判定へフォールバックする。
-- 移動は葉slot順を列とする2次元グリッドとして扱う。通常・double左右・T左右の葉slotを左から `col_idx` へ割り当て、複数の葉slotを含むgroup slotの `col_idx` は含有列の最小値とする。
-- `h` / `l` は同じ構造階層の方向側候補のうち、現在の `row_idx` 以下で最大の `row_idx` にある最寄り要素を選ぶ。最後の横移動で決まった `col_idx` は後続の `j` / `k` 中に維持する。
-- 下線groupの隣へ外側から`h` / `l`で入る場合、隣tokenに実表示のあるslotが現在カーソルと同じ表示高なら、そのtoken slotをgroup標識より優先する。隣tokenのslotが完全に空なら、空groupへ外から入る既存規則に従いgroup自身を選ぶ。
-- 子group下線と通常slotが同じ親下線の兄弟memberなら、`h` / `l` は子groupと通常slotを直接往復する。通常slotへの移動を「空groupへ外から入る」判定へ戻して親下線へループさせてはならない。
-- 同じ表示高の隣tokenに実slotがない場合、親groupの直接membersをその親が作る局所グリッド上の兄弟slotとして扱い、方向側の内側葉slotより先に選ぶ。明示的なmember参照として非T子groupへ横移動するときはmark内容の有無にかかわらず `single` 標識slotを選び、空でも同じ位置にカーソルを表示する。
-- 他groupに包含されない最上位group同士は、文ごとの暗黙rootが持つ兄弟memberとして `h` / `l` の直接移動対象にする。
-- 明示的な非T group参照へ横移動するときは、markが空でも `single` 標識slotを選ぶ。ただしgroup外から隣tokenへ入る場合は、同じ表示高に実表示のあるtoken slotがあればそのtokenを優先する。上下移動や下線クリックで下線を選ぶ場合との表示targetの違いを混同しない。
-- groupから `h` / `l` で外へ出るとき、隣接する疑似トークンは境界番号だけで決めない。groupが再帰的に含む葉を共通トークン列へ投影し、その最左端・最右端の直隣を選ぶ。同じ境界に疑似トークンが連続する場合も、group外の直近1要素へ移動する。
+- 現在位置の唯一の正本は、省略前の論理grid上の `navigationCursor={x,y}` である。semantic ref、token index、group ID、slot side、region、`display_y`、DOM要素、pixel座標および旧cursorフィールドは文書構造と論理座標から導出する情報であり、移動先を決める正本として参照しない。
+- 論理xは表面要素ごとの整数を基準とする。通常AtomicSlotは整数x、DoubleSlotの左右とTSlotのpre/postは `x` / `x+0.5` を使い、次の表面要素は次の整数xを使う。double/Tへの切替だけで後続要素を振り直さない。
+- 論理yは1始まりとし、token・疑似token・境界のatomic slotを1、最内側groupを2、その親を3とする。構造参照が明示する親子関係は表示layoutのlevelへ反映されていなくても論理yへ反映する。
+- group cellは再帰展開したatomic xを占める。非連続groupは、実在xを昇順に並べた軸上で連続する部分ごとにregionへ分ける。数値差1を連続性の定義にしない。
+- 同一論理 `(x,y)` には高々1つのselectable cellだけを置く。構造編集後に衝突が生じた場合は不正なlogical gridとして検出する。
+- 描画ごとに論理cellから `display_y` を導出する。空で非選択のatomicは0、標識・通常/V/固定cursor・編集中表示のあるatomicは1とする。groupは現在regionの直下論理段がすべて空なら `logical_y-1`、1つでも占有されていれば `logical_y` とする。省略量はcellごとに最大1で祖先へ累積しない。
+- 矢印との衝突回避でgroupが通常配置より押し下げられた場合、その離散段数を `arrowRowOffset` としてgroupの `display_y`へ加える。押し下げが重なり・包含groupへ伝播して実際の描画位置も下がった場合は、そのgroupにも実際の差分段数を加える。矢印回避offsetを論理cursorのyへ書き戻さない。
+- groupを選択して空slotのcursorを表示した場合、そのgroupは親groupの直下段を占有する。`display_y` は再描画で変化してよいが論理 `{x,y}` へ書き戻さない。
+- 通常時とV選択中の `h` / `l` は同じ規則を使う。キー入力開始時のlogical gridと表示snapshotを固定し、実在x軸上を方向へ進み、現在region外の最初のxで `candidate.display_y <= current.display_y` を満たす候補のうち最大の `display_y` を選ぶ。
+- 省略atomicの `display_y=0` も候補に残す。同じx・表示段で候補が競合する場合は可視候補を優先する。移動先確定後の再描画による省略・展開は次のキー入力からだけ使う。
+- 分割groupへ外部から入る場合は到着xを維持し、そのxを含むregionだけを選択表示する。クリック時も最寄りの実在xを論理cursorへ設定する。
+- `j` / `k` は同じxを含む省略前の論理yを使う。`0` / `$` と文跨ぎfallbackは到着cellの論理 `{x,y}` を設定する。
+- 構造編集で現在cellが消えた場合だけcursorを修復する。同じxで `logical_y <= 旧y` の最大cellを選び、それもなければ最寄りatomic xのy=1を選ぶ。描画、snapshot再生成、resize、scrollはcursorを修復・変更してはならない。
 - V選択中はactive区間・固定済みオレンジ区間の有無にかかわらず `j` / `k` を使える。入れ子groupは構造深さに従い一段ずつ移動し、深さを固定値に制限しない。
 - `U` は通常時だけでなくV選択カーソル表示中にも有効。内部slot上ではそれを含む最内側groupを削除し、親groupの削除対象参照は対象groupの直接membersへ展開して参照切れを残さない。
 - V選択中の正本は開始・終了rangeではなく、カーソルが実際に通過したslot参照のpath。経由していないslotを選択候補へ含めない。
@@ -323,4 +347,4 @@ inner_jsonの構造:
 - token TだけでなくgroupをT化した場合も、`left`と`right`は独立した基礎slotである。別の下線groupは`{structure, port:'left'}`または`{structure, port:'right'}`として片側だけをmemberにでき、display_jsonでは`structure:<id>:left/right`を別々のprimitive slotとして保持する。
 - 再帰展開した葉slotが連続する部分は1本の下線にする。選択されていない葉slotが間にある部分は下線を分割し、各区間の内側端を同色のマークで間接接続する。
 - `display_json` の各groupが持つ `underlineSegments` は上記の葉slot連続区間であり、`inner_json` の意味上の正本である `members` から毎回導出する。
-- `window.KiriEditorData` の `getInnerJson()`, `getDisplayJson()`, `loadInnerJson()` が保存・表示・復元の境界。
+- `window.KiriEditorData` の `getInnerJson()`, `getDisplayJson()`, `loadInnerJson()` が保存・表示・復元の境界で、`getNavigationSnapshot()`は現在文の描画済みgrid、`getSentenceProcessingSnapshot()`は文分割状況を診断用コピーとして返す。

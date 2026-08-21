@@ -1,19 +1,19 @@
 # 規則一覧と全ペア矛盾監査
 
-生成日: 2026-08-18
+生成日: 2026-08-21
 
 ## 監査方法
 
-- active規則集合を A とし、|A| = 159。
-- A x A の全順序対 25281 件を検査した。
+- active規則集合を A とし、|A| = 179。
+- A x A の全順序対 32041 件を検査した。
 - 判断名が異なるペアは独立、同じ判断名でも適用条件が排他的なら両立とする。
 - 同じ判断名で条件が同時成立し、結果が異なるペアだけを矛盾とする。
 - 全順序対の判定は `llm/rule-pair-audit.csv` に保存する。
 
 ## 結果
 
-- self: 159
-- orthogonal: 25054
+- self: 179
+- orthogonal: 31794
 - compatible: 68
 - unresolved conflict: 0
 
@@ -49,6 +49,7 @@
 - SL-09: 青、灰、オレンジの全slotカーソルに2pxの可視borderを表示する。
 - SL-10: BORDER位置カーソルと文末dummyはslot geometryの対象外とする。
 - SL-11: 通常青カーソルは常に1つだけ表示する。
+- SL-12: TSlotのpre_slotとpost_slotは必ずAtomicSlotとし、DoubleSlotをpre_slotへ格納しない。
 
 ### sequence
 
@@ -131,8 +132,8 @@
 
 - MV-01: NORMALとV選択中のh/lは同じ移動先計算を使う。
 - MV-02: 葉slot順をcol_idxとする。
-- MV-03: 複数葉を含むgroup slotのcol_idxは最小包含列とする。
-- MV-04: h/lは方向側候補のうち現在row以下で最大rowの最寄りを選ぶ。
+- MV-03: 複数葉を含むgroup slotのcol_idxは、選択中region内で保持したatomic葉列を使う。
+- MV-04: h/lは選択slotの現在regionを抜けるまでcol_idxを進め、最初の外部列で現在row以下の最大rowを選ぶ。
 - MV-05: 隣group内tokenに実表示slotが同じ高さにあれば、直接兄弟groupよりtoken slotを優先する。
 - MV-06: 隣group内部が完全に空なら外からはgroup自身へ入る。
 - MV-07: 同じ高さの実token候補がなく、明示的な非T子group参照を選ぶ場合は空でもsingle group slotを選ぶ。
@@ -153,6 +154,22 @@
 - MV-22: $は疑似tokenを含む現在行最後のsurfaceへ移る。
 - MV-23: h/lで行境界を跨ぐとき、境界側tokenに実表示slotがあれば内包groupのslotよりtoken slotを優先する。
 - MV-24: 非連続下線の区間内側端からh/lすると、別区間へ飛ばず隣接する未所属gap slotへ空でも移動する。
+- MV-25: 分割groupのcursorは保持中col_idxを含むregionだけへ表示し、左右regionを区別する。
+- MV-26: 外部atomic slotから分割groupへ入るとき、group最小列ではなく移動で到達したatomic列を保持してregionを決める。
+- MV-27: h/lの比較にはDOMのpixel Yではなく、論理gridと段占有状態から導出したdisplay_yを使う。
+- MV-28: 1回のh/lは時刻tの表示gridを固定して行先を確定し、再描画後のgridは次の入力から使う。
+- MV-29: 同じ列・表示段の可視候補と省略候補が競合するときは可視候補を選ぶ。
+- MV-30: 現在位置の唯一の正本は省略前gridのcursor.x/yとし、semantic ref、旧cursor、region、display_y、DOM、pixel座標を正本として参照しない。
+- MV-31: 表面要素は整数xを使い、Double/Tの左右だけをxとx+0.5にして後続整数xを振り直さない。
+- MV-32: atomicをy=1、最内側groupをy=2、親groupを順にy=3以上とする。
+- MV-33: 空atomicはdisplay_y=0、占有atomicは1、直下段が空のgroupはlogical_y-1、それ以外はlogical_yとし、省略を祖先へ累積しない。
+- MV-34: 分割regionの連続性は数値差ではなく実在x軸の昇順上で判定する。
+- MV-35: 構造編集でcellが消えた時だけ、同じxの旧y以下最大cell、なければ最寄りatomicへcursorを修復する。
+- MV-36: 描画と表示snapshotの再生成はcursor.x/yを変更しない。
+- MV-37: 矢印回避で実際に押し下がった離散段数をgroupのdisplay_yへ加え、論理yへは書き戻さない。
+- MV-38: 文内移動のlogical gridとsnapshotは現在文のcellだけを走査する。
+- MV-39: h/lは文内候補がない場合だけ行間adapterで前後文の表面端へ接続する。
+- MV-40: j/kは文内構造候補がない場合だけ行間adapterで前後文の最寄り論理xへ接続する。
 
 ### V-selection
 
@@ -193,7 +210,7 @@
 - JS-07: 文とtoken文字列はトップレベルtextから復元し重複保存しない。
 - JS-08: 空の標識値以外の空構造・境界・矢印など任意フィールドは省略する。
 - JS-09: tokenと疑似tokenの必須slotは内容が空でも保持する。
-- JS-10: window.KiriEditorDataの3 APIを保存・表示・復元境界とする。
+- JS-10: window.KiriEditorDataの保存・表示・復元APIに加え、描画済みnavigation snapshotの診断用コピーを公開する。
 
 ### keyboard
 
@@ -231,4 +248,7 @@
 - IM-06: syncFromInputで文跨ぎgroupと不正矢印を除去する。
 - IM-07: enabled再計算と矢印整合性を純粋coreで処理する。
 - IM-08: 座標依存の表示変更は実ブラウザで検証する。
+- IM-09: layout・navigation・下線・矢印の処理関数は文書全体ではなく1つのsentence stateを受け取る。
+- IM-10: groupの所属文は描画segmentに依存せず保存membersを子groupまで再帰展開して決める。
+- IM-11: 文境界を跨ぐ移動を決められるのは文内処理ではなくdocument shellの行間adapterだけとする。
 

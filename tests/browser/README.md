@@ -2,6 +2,8 @@
 
 `key-tests.mjs` は Playwright で `index.html` を直接開き、主要キー操作を 1 件ずつブラウザ上で検証する。`npm test` は先にactive規則集合Aの全ペア矛盾監査を実行し、その後ブラウザテストを実行する。
 
+キーボード操作に加えて、`editor-model.d.ts`に対応する実行時SentenceStateモデルの正常系とID参照エラーも検証する。
+
 ローカルに Node.js と Playwright がある場合:
 
 ```powershell
@@ -17,3 +19,10 @@ $env:NODE_PATH='C:\Users\yojiy\.cache\codex-runtimes\codex-primary-runtime\depen
 
 Playwright のブラウザバイナリが未導入でも、通常の Chrome / Edge が標準パスにあればそれを使う。
 明示する場合は `PLAYWRIGHT_CHROMIUM_EXECUTABLE` に `chrome.exe` または `msedge.exe` のパスを入れる。
+
+特定のテスト名だけを実行する場合は、部分文字列を指定できる。
+
+```powershell
+$env:KIRI_TEST_FILTER='sentence processing isolates'
+& 'C:\Users\yojiy\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' tests\browser\key-tests.mjs
+```

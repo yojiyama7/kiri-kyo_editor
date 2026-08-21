@@ -154,10 +154,84 @@
     const highestRow=Math.max(...eligible.map(candidate => Number(candidate.rowIdx)));
     const sameRow=eligible.filter(candidate => Number(candidate.rowIdx) === highestRow);
     sameRow.sort((a,b) =>
-      Math.abs(Number(a.colIdx)-currentColumn)-Math.abs(Number(b.colIdx)-currentColumn)
+      Number(Boolean(a.isCollapsed))-Number(Boolean(b.isCollapsed))
+      || Math.abs(Number(a.colIdx)-currentColumn)-Math.abs(Number(b.colIdx)-currentColumn)
       || Number(a.colIdx)-Number(b.colIdx)
     );
     return clone(sameRow[0]);
+  }
+
+  function contiguousColumnRegion(columns,anchor,xAxis=null){
+    const ordered=[...new Set((columns || [])
+      .map(Number)
+      .filter(Number.isFinite))].sort((a,b) => a-b);
+    const at=ordered.indexOf(Number(anchor));
+    if(at < 0) return [];
+    const axis=[...new Set((xAxis || []).map(Number).filter(Number.isFinite))].sort((a,b) => a-b);
+    if(axis.length){
+      const selected=new Set(ordered);
+      const axisAt=axis.indexOf(Number(anchor));
+      if(axisAt < 0) return [];
+      let start=axisAt;
+      let end=axisAt;
+      while(start > 0 && selected.has(axis[start-1])) start--;
+      while(end < axis.length-1 && selected.has(axis[end+1])) end++;
+      return axis.slice(start,end+1);
+    }
+    let start=at;
+    let end=at;
+    while(start > 0 && ordered[start-1] === ordered[start]-1) start--;
+    while(end < ordered.length-1 && ordered[end+1] === ordered[end]+1) end++;
+    return ordered.slice(start,end+1);
+  }
+
+  function calculateRegionHorizontalTarget({direction,current,candidates=[],xAxis=[]} = {}){
+    if((direction !== 'left' && direction !== 'right') || !current) return null;
+    const currentRow=Number(current.rowIdx);
+    const currentColumn=Number(current.colIdx);
+    if(!Number.isFinite(currentRow) || !Number.isFinite(currentColumn)) return null;
+    const currentRegion=contiguousColumnRegion(current.columns,currentColumn,xAxis);
+    if(!currentRegion.length) return null;
+    const sign=direction === 'left' ? -1 : 1;
+    const axis=[...new Set((xAxis || []).map(Number).filter(Number.isFinite))].sort((a,b) => a-b);
+    let targetColumn;
+    if(axis.length){
+      let axisIndex=axis.indexOf(currentColumn);
+      if(axisIndex < 0) return null;
+      const currentColumns=new Set(currentRegion);
+      do{
+        axisIndex+=sign;
+        targetColumn=axis[axisIndex];
+      }while(Number.isFinite(targetColumn) && currentColumns.has(targetColumn));
+      if(!Number.isFinite(targetColumn)) return null;
+    }else{
+      targetColumn=currentColumn+sign;
+      const currentColumns=new Set(currentRegion);
+      while(currentColumns.has(targetColumn)) targetColumn+=sign;
+    }
+
+    const eligible=(candidates || []).flatMap((candidate,index) => {
+      const row=Number(candidate?.rowIdx);
+      if(!Number.isFinite(row) || row > currentRow) return [];
+      const region=contiguousColumnRegion(candidate?.columns,targetColumn,xAxis);
+      if(!region.length) return [];
+      const sameRegion=row === currentRow
+        && region.length === currentRegion.length
+        && region.every((column,regionIndex) => column === currentRegion[regionIndex]);
+      return sameRegion ? [] : [{candidate,index,row,region}];
+    });
+    if(!eligible.length) return null;
+    eligible.sort((left,right) =>
+      right.row-left.row
+      || Number(Boolean(left.candidate.isCollapsed))-Number(Boolean(right.candidate.isCollapsed))
+      || left.index-right.index
+    );
+    const selected=eligible[0];
+    return {
+      ...clone(selected.candidate),
+      colIdx:targetColumn,
+      columns:selected.region
+    };
   }
 
   function calculateColumnPreservingTarget({column,candidates=[]} = {}){
@@ -489,106 +563,156 @@
     };
   }
 
-  function createInnerJson(state){
-    const document={version:1,text:state.text || '',sentences:[]};
-    const ranges=state.sentenceRanges || parseSentences(state.text || '').ranges;
-    const groups=state.groups || [];
-    const sentenceForWord=word => ranges.find(range => word >= range.start && word < range.end)?.index ?? -1;
-    const groupById=new Map(groups.map(group => [group.id,group]));
-    const sentenceForGroup=(groupId,visiting=new Set()) => {
-      if(visiting.has(groupId)) return -1;
-      const next=new Set(visiting).add(groupId);
-      for(const member of groupById.get(groupId)?.members || []){
-        const sentenceIndex=member?.group != null
-          ? sentenceForGroup(member.group,next)
-          : member?.gapToken != null
-            ? sentenceIndexForGap(ranges,member.gapToken)
-            : sentenceForWord(member?.word);
-        if(sentenceIndex >= 0) return sentenceIndex;
+  // The document shell owns cross-sentence ordering. Every semantic/layout
+  // operation below receives one isolated sentence slice with local arrays.
+  function splitSentenceStates(state){
+    const source=state || createState('');
+    const ranges=source.sentenceRanges || parseSentences(source.text || '').ranges;
+    const sourceGroups=source.groups || [];
+    const sourceGroupsById=new Map(sourceGroups.map(group => [group.id,group]));
+    const groupSentenceMemo=new Map();
+    const sentenceForPrimitiveRef=ref => {
+      if(ref?.boundary != null) return sentenceIndexForGap(ranges,ref.boundary);
+      if(ref?.gapToken != null) return sentenceIndexForGap(ranges,ref.gapToken);
+      if(ref?.word != null){
+        return ranges.find(range => ref.word >= range.start && ref.word < range.end)?.index ?? -1;
       }
       return -1;
     };
-    const sentenceForRef=ref => {
-      if(ref?.group != null) return sentenceForGroup(ref.group);
-      if(ref?.boundary != null) return sentenceIndexForGap(ranges,ref.boundary);
-      if(ref?.gapToken != null){
-        return sentenceIndexForGap(ranges,ref.gapToken);
+    const sentenceForGroup=(id,visiting=new Set()) => {
+      if(groupSentenceMemo.has(id)) return groupSentenceMemo.get(id);
+      if(visiting.has(id)) return -1;
+      const group=sourceGroupsById.get(id);
+      if(!group) return -1;
+      const nextVisiting=new Set(visiting).add(id);
+      const memberSentences=(group.members || [])
+        .map(member => member?.group != null
+          ? sentenceForGroup(member.group,nextVisiting)
+          : sentenceForPrimitiveRef(member))
+        .filter(index => index >= 0);
+      // Runtime-normalized groups also have segments. They are a fallback for
+      // legacy states whose member list has not yet been reconstructed.
+      if(!memberSentences.length){
+        for(const segment of group.segments || []){
+          const index=sentenceForPrimitiveRef(segment.startRef);
+          if(index >= 0) memberSentences.push(index);
+        }
       }
-      return sentenceForWord(ref?.word);
+      const unique=[...new Set(memberSentences)];
+      const result=unique.length === 1 ? unique[0] : -1;
+      groupSentenceMemo.set(id,result);
+      return result;
     };
+    const sentenceForRef=ref => ref?.group != null
+      ? sentenceForGroup(ref.group)
+      : sentenceForPrimitiveRef(ref);
+    return ranges.map(range => {
+      const start=range.start;
+      const end=range.end;
+      const groups=sourceGroups.filter(group => sentenceForGroup(group.id) === range.index);
+      const groupIds=new Set(groups.map(group => group.id));
+      const arrows=(source.arrows || []).filter(arrow =>
+        sentenceForRef(arrow.from) === range.index
+        && sentenceForRef(arrow.to) === range.index
+      );
+      return {
+        kind:'sentence_state',
+        index:range.index,
+        text:range.text || '',
+        wordOffset:start,
+        range:{...range},
+        tokens:(source.tokens || []).slice(start,end),
+        workSlots:(source.workSlots || []).slice(start,end),
+        verbals:(source.verbals || []).slice(start,end),
+        gaps:(source.gaps || []).slice(start,end+1),
+        boundarySlots:(source.boundarySlots || []).slice(start,end+1),
+        gapTokens:(source.gapTokens || []).slice(start,end+1),
+        ownedLocalGaps:Array.from({length:end-start+1},(_,local) => local)
+          .filter(local => sentenceIndexForGap(ranges,start+local) === range.index),
+        groups,
+        groupIds,
+        arrows,
+        navigationCursor:{...(source.navigationCursor || {x:null,y:null})}
+      };
+    });
+  }
 
-    for(const range of ranges){
-      const localRef=ref => ref?.group != null
-        ? {structure:ref.group,port:ref.slot || 'single'}
-        : ref?.boundary != null
-          ? {boundary:ref.boundary-range.start,boundaryIndex:boundaryIndexOf(ref),port:'single'}
+  function createInnerSentence(sentenceState){
+    if(sentenceState?.kind !== 'sentence_state') throw new TypeError('expected a sentence_state');
+    const offset=sentenceState.wordOffset;
+    const localRef=ref => ref?.group != null
+      ? {structure:ref.group,port:ref.slot || 'single'}
+      : ref?.boundary != null
+        ? {boundary:ref.boundary-offset,boundaryIndex:boundaryIndexOf(ref),port:'single'}
         : ref?.gapToken != null
-          ? {pseudoToken:ref.gapToken-range.start,pseudoIndex:pseudoIndexOf(ref),port:'single'}
-        : {token:(ref?.word ?? range.start)-range.start,port:ref?.slot || 'single'};
-      const sentence={tokens:[]};
-      for(let word=range.start;word<range.end;word++){
-        sentence.tokens.push({slot:persistentSlot(state.workSlots?.[word])});
-      }
-
-      const structures=[];
-      for(let word=range.start;word<range.end;word++){
-        const verbal=persistentT(state.verbals?.[word]);
-        if(verbal.on){
-          structures.push({
-            kind:'verbal',
-            token:word-range.start,
-            form:'T',
-            slots:verbal.slots
-          });
-        }
-      }
-      for(const group of groups){
-        if(sentenceForGroup(group.id) !== range.index) continue;
-        const verbal=persistentT(group.verbal);
-        const structure={
-          id:group.id,
-          kind:'group',
-          members:(group.members || []).map(localRef),
-          form:verbal.on ? 'T' : 'underline',
-          mark:group.mark || ''
-        };
-        if(verbal.on) structure.slots=verbal.slots;
-        structures.push(structure);
-      }
-      if(structures.length) sentence.structures=structures;
-
-      const boundaries={};
-      const boundarySlots={};
-      const pseudoTokens={};
-      for(let gap=range.start;gap<=range.end;gap++){
-        if(sentenceIndexForGap(ranges,gap) !== range.index) continue;
-        if(state.gaps?.[gap]) boundaries[gap-range.start]=state.gaps[gap];
-        const slots=state.boundarySlots?.[gap] || [];
-        const persistent=Object.fromEntries(slots
-          .map((slot,index) => slot && state.gaps?.[gap]?.[index] === '['
-            ? [index,persistentSlot(slot)]
-            : null)
-          .filter(Boolean));
-        if(Object.keys(persistent).length) boundarySlots[gap-range.start]=persistent;
-        const pseudos=pseudoList(state.gapTokens?.[gap]);
-        if(pseudos.length){
-          pseudoTokens[gap-range.start]=pseudos.map(pseudo => ({
-            text:pseudo.text,
-            slot:persistentSlot(pseudo.slot)
-          }));
-        }
-      }
-      if(Object.keys(boundaries).length) sentence.boundaries=boundaries;
-      if(Object.keys(boundarySlots).length) sentence.boundarySlots=boundarySlots;
-      if(Object.keys(pseudoTokens).length) sentence.pseudoTokens=pseudoTokens;
-
-      const arrows=(state.arrows || [])
-        .filter(arrow => sentenceForRef(arrow.from) === range.index && sentenceForRef(arrow.to) === range.index)
-        .map(arrow => ({from:localRef(arrow.from),to:localRef(arrow.to)}));
-      if(arrows.length) sentence.arrows=arrows;
-      document.sentences.push(sentence);
+          ? {pseudoToken:ref.gapToken-offset,pseudoIndex:pseudoIndexOf(ref),port:'single'}
+          : {token:(ref?.word ?? offset)-offset,port:ref?.slot || 'single'};
+    const sentence={tokens:sentenceState.tokens.map((_,local) => ({
+      slot:persistentSlot(sentenceState.workSlots[local])
+    }))};
+    const structures=[];
+    for(let local=0;local<sentenceState.tokens.length;local++){
+      const verbal=persistentT(sentenceState.verbals[local]);
+      if(verbal.on) structures.push({
+        kind:'verbal',token:local,form:'T',slots:verbal.slots
+      });
     }
-    return document;
+    for(const group of sentenceState.groups){
+      const verbal=persistentT(group.verbal);
+      const structure={
+        id:group.id,
+        kind:'group',
+        members:(group.members || []).map(localRef),
+        form:verbal.on ? 'T' : 'underline',
+        mark:group.mark || ''
+      };
+      if(verbal.on) structure.slots=verbal.slots;
+      structures.push(structure);
+    }
+    if(structures.length) sentence.structures=structures;
+
+    const boundaries={};
+    const boundarySlots={};
+    const pseudoTokens={};
+    for(let localGap=0;localGap<sentenceState.gaps.length;localGap++){
+      const globalGap=offset+localGap;
+      if(globalGap < sentenceState.range.start || globalGap > sentenceState.range.end) continue;
+      // A token boundary shared by two lines belongs to the preceding line,
+      // matching sentenceIndexForGap().
+      if(!sentenceState.ownedLocalGaps.includes(localGap)) continue;
+      const value=sentenceState.gaps[localGap] || '';
+      if(value) boundaries[localGap]=value;
+      const slots=sentenceState.boundarySlots[localGap] || [];
+      const persistent=Object.fromEntries(slots
+        .map((slot,index) => slot && value[index] === '[' ? [index,persistentSlot(slot)] : null)
+        .filter(Boolean));
+      if(Object.keys(persistent).length) boundarySlots[localGap]=persistent;
+      const pseudos=pseudoList(sentenceState.gapTokens[localGap]);
+      if(pseudos.length) pseudoTokens[localGap]=pseudos.map(pseudo => ({
+        text:pseudo.text,
+        slot:persistentSlot(pseudo.slot)
+      }));
+    }
+    if(Object.keys(boundaries).length) sentence.boundaries=boundaries;
+    if(Object.keys(boundarySlots).length) sentence.boundarySlots=boundarySlots;
+    if(Object.keys(pseudoTokens).length) sentence.pseudoTokens=pseudoTokens;
+    if(sentenceState.arrows.length){
+      sentence.arrows=sentenceState.arrows.map(arrow => ({from:localRef(arrow.from),to:localRef(arrow.to)}));
+    }
+    return sentence;
+  }
+
+  function createDisplaySentence(sentenceState,{lineStep=27}={}){
+    const sentence=createInnerSentence(sentenceState);
+    return {...sentence,display:{groups:calculateUnderlineLayouts(sentence,{lineStep})}};
+  }
+
+  function createInnerJson(state){
+    return {
+      version:1,
+      text:state.text || '',
+      sentences:splitSentenceStates(state).map(createInnerSentence)
+    };
   }
 
   function stateFromInnerJson(innerJson){
@@ -714,6 +838,7 @@
       numericPending:false,
       cursor:0,
       cursorSlot:null,
+      navigationCursor:{x:null,y:null},
       text:String(text),
       tokens:parsed.tokens,
       sentenceRanges:parsed.ranges,
@@ -1006,14 +1131,18 @@
     cleanupArrows,
     compressSelectionRefs,
     createDisplayJson,
+    createDisplaySentence,
     createInnerJson,
+    createInnerSentence,
     createTokenSequence,
     sentenceIndexForGap,
+    splitSentenceStates,
     calculateColumnPreservingTarget,
     calculateNormalBoundaryIndex,
     calculateBorderPositions,
     calculateContainedHorizontalTarget,
     calculateGridHorizontalTarget,
+    calculateRegionHorizontalTarget,
     calculateHorizontalTarget,
     calculateSlotGeometry,
     createState,
