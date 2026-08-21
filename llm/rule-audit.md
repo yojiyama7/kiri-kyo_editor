@@ -4,16 +4,16 @@
 
 ## 監査方法
 
-- active規則集合を A とし、|A| = 179。
-- A x A の全順序対 32041 件を検査した。
+- active規則集合を A とし、|A| = 194。
+- A x A の全順序対 37636 件を検査した。
 - 判断名が異なるペアは独立、同じ判断名でも適用条件が排他的なら両立とする。
 - 同じ判断名で条件が同時成立し、結果が異なるペアだけを矛盾とする。
 - 全順序対の判定は `llm/rule-pair-audit.csv` に保存する。
 
 ## 結果
 
-- self: 179
-- orthogonal: 31794
+- self: 194
+- orthogonal: 37374
 - compatible: 68
 - unresolved conflict: 0
 
@@ -38,18 +38,21 @@
 
 ### slot
 
-- SL-01: single slotはtextを1つ持つ。
-- SL-02: double slotは独立したleft/rightを持つ。
-- SL-03: token Tとgroup Tは独立したleft/right slotを持つ。
-- SL-04: Tで隠れる元slotは値を保持したまま無効化する。
-- SL-05: 現在非表示の元slotもinner_jsonから復元可能にする。
+- SL-01: AtomicSlotはSlotIdと内部markコードを1つ持つ。
+- SL-02: DoubleSlotは元Atomicをlslotとして保持し、独立したrslotを持つ。
+- SL-03: token Tは元Atomicをpre_slotとして保持し、独立したpost_slotを持つ。
+- SL-04: 通常tokenのslot状態はToken.word_slot.slotだけを正本とし、並行配列へ保持しない。
+- SL-05: word slotのenabledは保存せず外側group Tの包含から導出する。
 - SL-06: 全slot矩形は純粋関数calculateSlotGeometryで算出する。
 - SL-07: geometry layoutはsingle、double-pair、t-pair、underlineとする。
 - SL-08: 全slotカーソルの外形高さを20pxに統一する。
 - SL-09: 青、灰、オレンジの全slotカーソルに2pxの可視borderを表示する。
 - SL-10: BORDER位置カーソルと文末dummyはslot geometryの対象外とする。
-- SL-11: 通常青カーソルは常に1つだけ表示する。
+- SL-11: 通常青カーソルは常に1つだけ表示する。group cursorはsentence_idxとGroupIdの組で描画対象を決め、別文の同一GroupIdへ複製しない。
 - SL-12: TSlotのpre_slotとpost_slotは必ずAtomicSlotとし、DoubleSlotをpre_slotへ格納しない。
+- SL-13: runtime stateにtokens[]、workSlots[]、verbals[]の並行配列を置かない。
+- SL-14: 既知markは内部コードで保存し描画時に表示値へ変換し、未知文字列はそのまま扱う。
+- SL-15: double/T切替とtext同期で生存するTokenId・SlotIdを振り直さない。
 
 ### sequence
 
@@ -61,8 +64,11 @@
 
 ### group
 
-- GR-01: groupの意味構造の正本は直接選択したslot参照membersとする。
-- GR-02: segments、start、endはmembersから導出する描画キャッシュとする。
+- GR-01: groupの意味構造の正本はSentenceState.underline_groupsのchild_idsとslotだけとする。
+- GR-02: segments、region、start、endはchild_idsを再帰展開して描画時に導出し、状態へ保存しない。
+- GR-18: UnderlineGroupはSlotIdと別名前空間のGroupIdを永続identityとして持つ。
+- GR-19: child_idsは同一文の既存SlotIdだけを重複なく参照し、自己参照とgroup循環を禁止する。
+- GR-20: runtimeにglobal groups配列を置かず、文ごとのunderline_groupsだけを正本とする。
 - GR-03: V groupは合計2slot以上で確定する。
 - GR-04: group所属は選択した正確なslot参照だけで決める。
 - GR-05: range、同一境界、近接関係から未選択memberを補完しない。
@@ -127,6 +133,8 @@
 - AR-13: 水平範囲が重なっても実Yが異なる矢印は同じlevelを使う。
 - AR-14: 矢印の水平線が無関係な下線および直下group標識帯とX方向に重なる場合、その帯を抜けるまで12px刻みで下のレーンへ送る。両端を含むgroup自身の帯と縦線交差は判定に含めない。
 - AR-15: 矢印の両端を再帰的に含むgroupの下線帯は、その内部矢印自身のレーン障害物にしない。
+- AR-16: 矢印の水平レーンが次の表示行へ達する場合は、文末breakのheight、同一文内の行margin、または最終文のbottom paddingとして所有文の高さを拡張する。最終SVGの実lane Yで再検証し、横線・矢尻と次行の間を7px以上空ける。予約量は表示から導出し保存しない。
+- AR-17: 矢印経路のgroup参照はsentence_idxとGroupIdの組で解決し、アクティブな文や同じGroupIdを持つ別文を端点・表示行・障害物・押下げ対象に含めない。同一行の矢印は別文選択後も複数行経路へ変化させない。
 
 ### movement
 
@@ -197,6 +205,7 @@
 - DP-10: 矢印衝突による下方補正をinner_jsonへ保存しない。
 - DP-11: group外slotの選択でそのgroupの下線・標識・矢印位置を変えない。
 - DP-13: 複数行に折り返す下線は各行の局所下端を基準にし、group間のlevel差を各行で維持する。
+- DP-14: group T内部slotを直接含む下線は対象slotの実下端より下へ置き、同じ表示行の分割regionにもそのbaselineを適用する。
 - DP-12: group T左右をdisplay_jsonでstructure:<id>:left/rightとして区別する。
 
 ### json
@@ -246,9 +255,15 @@
 - IM-04: 状態のUI読み書きをreadEditorState/writeEditorStateへ集約する。
 - IM-05: renderでDOMを再構築後、下線と矢印を描画する。
 - IM-06: syncFromInputで文跨ぎgroupと不正矢印を除去する。
-- IM-07: enabled再計算と矢印整合性を純粋coreで処理する。
+- IM-07: enabledは保存・互換stateへ書かず、SentenceStateのT包含関係から導出する。
 - IM-08: 座標依存の表示変更は実ブラウザで検証する。
 - IM-09: layout・navigation・下線・矢印の処理関数は文書全体ではなく1つのsentence stateを受け取る。
-- IM-10: groupの所属文は描画segmentに依存せず保存membersを子groupまで再帰展開して決める。
+- IM-10: groupは所属SentenceStateから移動せず、child_idsを同じ文のSlotIndexで再帰解決する。
 - IM-11: 文境界を跨ぐ移動を決められるのは文内処理ではなくdocument shellの行間adapterだけとする。
+- IM-12: runtimeの下線groupはSentenceState.underline_groupsだけを正本とし、members、segments、start/end、mark/verbal projectionを状態・履歴へ置かない。
+- IM-13: 文書レベルのGroupId、SlotId、BoundaryItemId参照はsentence_idxと組にし、同じIDを持つ別文を混同しない。
+- IM-14: runtimeの境界記号、境界slot、疑似token、矢印はSentenceStateだけを正本とし、gaps、boundarySlots、gapTokens、global arrowsの並行状態を置かない。
+- IM-15: 文内矢印端点はSlotIdまたはBoundaryItemIdで保持し、token・境界の位置index参照はinner_json v1 adapter内だけで生成・解釈する。
+- IM-16: 更新時間はkeydown開始からDOM・下線・矢印・navigation snapshot更新後の次taskまでを入力時モードと操作別に集計し、inner_json直下へ平均・直近・最大・回数を表示する。
+- IM-17: SentenceStateを変更しないV操作は本文DOMを再生成せず、選択classと現在文overlayだけを更新する。overlay描画中の全文cloneと重複描画を禁止する。
 

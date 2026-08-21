@@ -155,6 +155,7 @@ test('the typed sentence model is available through the editor data API', async 
       tokens:{
         10:{
           id:10,
+          text:'alpha',
           word_slot:{
             kind:'word_slot',
             slot:{
@@ -167,6 +168,7 @@ test('the typed sentence model is available through the editor data API', async 
         },
         20:{
           id:20,
+          text:'beta',
           word_slot:{
             kind:'word_slot',
             slot:{id:200,kind:'atomic_slot',mark:'a'}
@@ -174,7 +176,11 @@ test('the typed sentence model is available through the editor data API', async 
         }
       },
       token_chain:[10,20],
+      pseudo_tokens:{},
+      boundary_items:{},
+      arrows:[],
       underline_groups:[{
+        id:7,
         kind:'underline_group',
         child_ids:[100,200],
         slot:{
@@ -184,7 +190,7 @@ test('the typed sentence model is available through the editor data API', async 
           post_slot:{id:302,kind:'atomic_slot',mark:'ad'}
         }
       }],
-      cursor:102
+      cursor:{x:1,y:1}
     });
     const validation=model.validateSentenceState(state);
     state.token_chain.reverse();
@@ -208,11 +214,14 @@ test('the typed sentence model rejects broken ID references', async ({ page }) =
     const model=window.KiriEditorData.model;
     const base={
       tokens:{
-        1:{id:1,word_slot:{kind:'word_slot',slot:{id:10,kind:'atomic_slot',mark:'s'}}}
+        1:{id:1,text:'word',word_slot:{kind:'word_slot',slot:{id:10,kind:'atomic_slot',mark:'s'}}}
       },
       token_chain:[1],
+      pseudo_tokens:{},
+      boundary_items:{},
+      arrows:[],
       underline_groups:[],
-      cursor:10
+      cursor:{x:0,y:1}
     };
     const capture=state => {
       try{
@@ -224,8 +233,9 @@ test('the typed sentence model rejects broken ID references', async ({ page }) =
     };
     return [
       capture({...base,token_chain:[2]}),
-      capture({...base,cursor:99}),
+      capture({...base,cursor:{x:0.25,y:1}}),
       capture({...base,underline_groups:[{
+        id:2,
         kind:'underline_group',
         child_ids:[99],
         slot:{id:20,kind:'atomic_slot',mark:'v'}
@@ -233,7 +243,7 @@ test('the typed sentence model rejects broken ID references', async ({ page }) =
     ];
   });
   assert.match(messages[0],/unknown TokenId 2/);
-  assert.match(messages[1],/unknown SlotId 99/);
+  assert.match(messages[1],/integer or half-integer/);
   assert.match(messages[2],/unknown SlotId 99/);
 });
 
@@ -244,16 +254,20 @@ test('the typed sentence model accepts an arbitrary string mark', async ({ page 
       tokens:{
         1:{
           id:1,
+          text:'word',
           word_slot:{kind:'word_slot',slot:{id:10,kind:'atomic_slot',mark:'任意標識'}}
         }
       },
       token_chain:[1],
+      pseudo_tokens:{},
+      boundary_items:{},
+      arrows:[],
       underline_groups:[],
-      cursor:10
+      cursor:{x:0,y:1}
     };
     return model.validateSentenceState(state);
   });
-  assert.deepEqual(result,{slot_ids:[10],token_ids:[1]});
+  assert.deepEqual(result,{slot_ids:[10],token_ids:[1],group_ids:[]});
 });
 
 test('the typed sentence model keeps T pre_slot atomic and rejects double replacement', async ({ page }) => {
@@ -261,11 +275,14 @@ test('the typed sentence model keeps T pre_slot atomic and rejects double replac
     const model=window.KiriEditorData.model;
     const original={
       tokens:{
-        1:{id:1,word_slot:{kind:'word_slot',slot:{id:10,kind:'atomic_slot',mark:'s'}}}
+        1:{id:1,text:'word',word_slot:{kind:'word_slot',slot:{id:10,kind:'atomic_slot',mark:'s'}}}
       },
       token_chain:[1],
+      pseudo_tokens:{},
+      boundary_items:{},
+      arrows:[],
       underline_groups:[],
-      cursor:10
+      cursor:{x:0,y:1}
     };
     const replaced=model.replaceWordSlotWithT(original,1,{
       id:20,
@@ -274,13 +291,13 @@ test('the typed sentence model keeps T pre_slot atomic and rejects double replac
     const restored=model.restoreWordSlotFromT(replaced,1);
     const doubleState={
       ...original,
-      tokens:{1:{id:1,word_slot:{kind:'word_slot',slot:{
+      tokens:{1:{id:1,text:'word',word_slot:{kind:'word_slot',slot:{
         id:30,
         kind:'double_slot',
         lslot:{id:31,kind:'atomic_slot',mark:'s'},
         rslot:{id:32,kind:'atomic_slot',mark:'v'}
       }}}},
-      cursor:31
+      cursor:{x:0,y:1}
     };
     let doubleError='';
     try{
@@ -297,6 +314,168 @@ test('the typed sentence model keeps T pre_slot atomic and rejects double replac
   assert.deepEqual(result.replaced.tokens[1].word_slot.slot.pre_slot,result.original.tokens[1].word_slot.slot);
   assert.deepEqual(result.restored,result.original);
   assert.match(result.doubleError,/must contain an AtomicSlot/);
+});
+
+test('runtime word state uses SentenceState tokens without legacy parallel arrays', async ({ page }) => {
+  const initial=await page.evaluate(() => window.KiriEditorTesting.getRuntimeWordState());
+  assert.equal(initial.hasLegacyTokens,false);
+  assert.equal(initial.hasLegacyWorkSlots,false);
+  assert.equal(initial.hasLegacyVerbals,false);
+  assert.equal(initial.hasLegacyGroups,false);
+  assert.equal(initial.hasLegacyAuxiliaryArrays,false);
+  assert.equal(initial.hasLegacyAuxiliaryCursors,false);
+  await page.evaluate(() => window.KiriEditorTesting.getRuntimeWordState().sentenceStates
+    .forEach(state => window.KiriEditorData.model.validateSentenceState(state)));
+  const firstId=initial.sentenceStates[0].token_chain[0];
+  const firstAtomic=initial.sentenceStates[0].tokens[firstId].word_slot.slot;
+  const followingIds=initial.sentenceStates.flatMap(state => state.token_chain);
+
+  await typeKeys(page,['s','Enter','d']);
+  let current=await page.evaluate(() => window.KiriEditorTesting.getRuntimeWordState());
+  let first=current.sentenceStates[0].tokens[firstId].word_slot.slot;
+  assert.equal(first.kind,'double_slot');
+  assert.equal(first.lslot.id,firstAtomic.id);
+  assert.equal(first.lslot.mark,'s');
+  assert.deepEqual(current.sentenceStates.flatMap(state => state.token_chain),followingIds);
+
+  await press(page,'d');
+  current=await page.evaluate(() => window.KiriEditorTesting.getRuntimeWordState());
+  first=current.sentenceStates[0].tokens[firstId].word_slot.slot;
+  assert.equal(first.kind,'atomic_slot');
+  assert.equal(first.id,firstAtomic.id);
+
+  await press(page,'t');
+  current=await page.evaluate(() => window.KiriEditorTesting.getRuntimeWordState());
+  first=current.sentenceStates[0].tokens[firstId].word_slot.slot;
+  assert.equal(first.kind,'t_slot');
+  assert.equal(first.pre_slot.id,firstAtomic.id);
+  await press(page,'X');
+  current=await page.evaluate(() => window.KiriEditorTesting.getRuntimeWordState());
+  first=current.sentenceStates[0].tokens[firstId].word_slot.slot;
+  assert.equal(first.kind,'atomic_slot');
+  assert.equal(first.id,firstAtomic.id);
+
+  await page.locator('#input').fill(`${sampleText} extra`);
+  await page.waitForFunction(() => document.querySelectorAll('.word:not([data-dummy])').length === 9);
+  current=await page.evaluate(() => window.KiriEditorTesting.getRuntimeWordState());
+  assert.deepEqual(current.sentenceStates.flatMap(state => state.token_chain).slice(0,8),followingIds);
+  assert.equal(new Set(current.sentenceStates.flatMap(state => state.token_chain)).size,9);
+});
+
+test('runtime underline groups use GroupId and SlotId children without legacy fields', async ({ page }) => {
+  const inner={version:1,text:'a b',sentences:[{
+    tokens:[{slot:{kind:'single',text:''}},{slot:{kind:'single',text:''}}],
+    boundaries:{1:'['},
+    boundarySlots:{1:{0:{kind:'single',text:'S'}}},
+    pseudoTokens:{1:[{text:'p',slot:{kind:'single',text:'O'}}]},
+    structures:[
+      {id:7,kind:'group',members:[
+        {token:0,port:'single'},
+        {pseudoToken:1,pseudoIndex:0,port:'single'},
+        {boundary:1,boundaryIndex:0,port:'single'}
+      ],form:'underline',mark:'V'},
+      {id:9,kind:'group',members:[{structure:7,port:'single'},{token:1,port:'single'}],form:'T',mark:'',slots:{
+        left:{kind:'single',text:'C'},right:{kind:'single',text:''}
+      }}
+    ]
+  }]};
+  await page.evaluate(value => window.KiriEditorData.loadInnerJson(value),inner);
+  const result=await page.evaluate(() => {
+    const runtime=window.KiriEditorTesting.getRuntimeWordState();
+    const state=runtime.sentenceStates[0];
+    const index=window.KiriEditorData.model.buildSlotIndex(state);
+    return {
+      hasLegacyGroups:runtime.hasLegacyGroups,
+      hasLegacyGroupProjection:runtime.hasLegacyGroupProjection,
+      hasLegacyGroupCursorFields:runtime.hasLegacyGroupCursorFields,
+      groups:state.underline_groups,
+      childOwners:state.underline_groups.map(group => group.child_ids.map(id => index.get(id)?.kind)),
+      valid:window.KiriEditorData.model.validateSentenceState(state),
+      roundTrip:window.KiriEditorData.getInnerJson()
+    };
+  });
+  assert.equal(result.hasLegacyGroups,false);
+  assert.equal(result.hasLegacyGroupProjection,false);
+  assert.equal(result.hasLegacyGroupCursorFields,false);
+  assert.deepEqual(result.groups.map(group => Object.keys(group).sort()),[
+    ['child_ids','id','kind','slot'],['child_ids','id','kind','slot']
+  ]);
+  assert.deepEqual(result.groups.map(group => group.id),[7,9]);
+  assert.deepEqual(result.childOwners,[
+    ['token','pseudo_token','boundary'],['underline_group','token']
+  ]);
+  assert.equal(result.groups[1].slot.kind,'t_slot');
+  assert.deepEqual(result.roundTrip,inner);
+});
+
+test('sentence-qualified group and slot references do not collide across sentences', async ({ page }) => {
+  const result=await page.evaluate(() => {
+    const core=window.KiriEditorCore;
+    const model=window.KiriEditorModel;
+    const state=core.createState('a\nb');
+    const first=state.sentenceStates[0];
+    const second=state.sentenceStates[1];
+    const firstToken=first.tokens[first.token_chain[0]];
+    const secondToken=second.tokens[second.token_chain[0]];
+    secondToken.word_slot.slot.id=firstToken.word_slot.slot.id;
+    state.sentenceStates[0]=model.createUnderlineGroup(first,[firstToken.word_slot.slot.id],1);
+    state.sentenceStates[1]=model.createUnderlineGroup(second,[secondToken.word_slot.slot.id],1);
+    const views=state.sentenceStates.map((sentence,sentenceIndex) =>
+      core.buildSentenceGroupView(sentence,{sentenceIndex})
+    );
+    return {
+      valid:state.sentenceStates.map(sentence => model.validateSentenceState(sentence)),
+      refs:views.map(view => view.groups[0].slot_ref),
+      resolved:[0,1].map(sentence_idx => core.slotIdForDisplayRef(state,{
+        sentence_idx,group:1,slot:null
+      })),
+      saved:core.createInnerJson(state)
+    };
+  });
+  assert.deepEqual(result.refs.map(ref => ref.sentence_idx),[0,1]);
+  assert.deepEqual(result.resolved,result.refs.map(ref => ref.slot_id));
+  assert.deepEqual(result.saved.sentences.map(sentence => sentence.structures[0].id),[1,1]);
+
+  const inner={version:1,text:'a\nb',sentences:[
+    {tokens:[{slot:{kind:'single',text:''}}],structures:[{
+      id:1,kind:'group',members:[{token:0,port:'single'}],form:'underline',mark:'S'
+    }]},
+    {tokens:[{slot:{kind:'single',text:''}}],structures:[{
+      id:1,kind:'group',members:[{token:0,port:'single'}],form:'underline',mark:'O'
+    }]}
+  ]};
+  await page.evaluate(document => window.KiriEditorData.loadInnerJson(document),inner);
+  const marks=page.locator('.group-mark[data-group-work="1"]');
+  assert.equal(await marks.count(),2);
+  await marks.nth(1).click();
+  await typeKeys(page,['c','Enter']);
+  const saved=await internalJson(page);
+  assert.deepEqual(saved.sentences.map(sentence => sentence.structures[0].mark),['S','C']);
+});
+
+test('only one group slot cursor is drawn when sentences reuse the same GroupId', async ({ page }) => {
+  const inner={version:1,text:'A B\nC D',sentences:[
+    {
+      tokens:[{slot:{kind:'single',text:''}},{slot:{kind:'single',text:'(1)'}}],
+      structures:[{
+        id:1,kind:'group',members:[{token:0,port:'single'},{token:1,port:'single'}],form:'underline',mark:''
+      }]
+    },
+    {
+      tokens:[{slot:{kind:'single',text:''}},{slot:{kind:'single',text:'(2)'}}],
+      structures:[{
+        id:1,kind:'group',members:[{token:0,port:'single'},{token:1,port:'single'}],form:'underline',mark:''
+      }]
+    }
+  ]};
+  await page.evaluate(document => window.KiriEditorData.loadInnerJson(document),inner);
+  await page.locator(
+    '.group-underline[data-group-sentence="1"][data-group-underline="1"]'
+  ).click();
+  await page.waitForTimeout(100);
+  const cursors=page.locator('.group-underline-cursor');
+  assert.equal(await cursors.count(),1);
+  assert.equal(await cursors.first().getAttribute('data-group-sentence'),'1');
 });
 
 const markCases = [
@@ -356,6 +535,42 @@ test('h/l/0/$ move the normal cursor', async ({ page }) => {
   assert.equal((await currentCursor(page)).word, 4);
   await press(page, '0');
   assert.equal((await currentCursor(page)).word, 0);
+});
+
+test('key update timing separates normal and V-selection operations below inner_json', async ({ page }) => {
+  await press(page,'l');
+  await page.evaluate(() => { window.__wordBeforeVFastPath=document.querySelector('.word[data-index="0"]'); });
+  await typeKeys(page,['V','l','h']);
+  await page.waitForTimeout(50);
+  const timing=await page.locator('#keyPerformance').evaluate(element => {
+    const rect=element.getBoundingClientRect();
+    const row=(id) => {
+      const item=element.querySelector(`[data-operation-id="${id}"]`);
+      return item ? item.textContent.replace(/\s+/g,' ').trim() : null;
+    };
+    return {
+      latestOperation:element.dataset.operation,
+      latestAverage:Number(element.dataset.averageMs),
+      normalRight:row('normal:l'),
+      selectionStart:row('selection:start'),
+      selectionRight:row('selection:active:l'),
+      selectionLeft:row('selection:active:h'),
+      keptWordDom:window.__wordBeforeVFastPath === document.querySelector('.word[data-index="0"]'),
+      top:rect.top,
+      bottom:rect.bottom,
+      internalBottom:document.querySelector('.internal-wrap').getBoundingClientRect().bottom,
+      statusTop:document.querySelector('.status').getBoundingClientRect().top
+    };
+  });
+  assert.equal(timing.latestOperation,'selection:active:h');
+  assert.ok(timing.latestAverage>0);
+  assert.match(timing.normalRight,/通常: 右移動/);
+  assert.match(timing.selectionStart,/V: 選択モード開始/);
+  assert.match(timing.selectionRight,/V選択: 右移動/);
+  assert.match(timing.selectionLeft,/V選択: 左移動/);
+  assert.equal(timing.keptWordDom,true);
+  assert.ok(Math.abs(timing.top-timing.internalBottom)<1);
+  assert.ok(Math.abs(timing.bottom-timing.statusTop)<1);
 });
 
 test('logical cursor uses display projection to move from X to Y in ABCD/X/Y/Z', async ({ page }) => {
@@ -999,12 +1214,14 @@ test('V selection l follows normal movement between empty slots in one underline
 
 test('V selection contains only slots visited while moving across an empty group', async ({ page }) => {
   await typeKeys(page, ['l', 'V', 'l', 'Enter', 'h', 'V', 'l', 'l']);
+  await page.waitForTimeout(100);
   let snap = await groupSelectionSnapshot(page);
   assert.equal(snap.active.length, 3);
   assert.deepEqual(snap.active.map((item) => item.word).filter((word) => word != null), [0, 3]);
   assert.deepEqual(snap.active.map((item) => item.group).filter(Boolean), ['1']);
 
   await press(page, 'h');
+  await page.waitForTimeout(50);
   snap = await groupSelectionSnapshot(page);
   assert.equal(snap.active.length, 2);
   assert.deepEqual(snap.active.map((item) => item.word).filter((word) => word != null), [0]);
@@ -1188,6 +1405,35 @@ test('each half of a group T can independently belong to another underline', asy
   }
 });
 
+test('an underline containing a group T internal slot is drawn below that slot', async ({ page }) => {
+  const inner={version:1,text:'His carrer culminated in his being elected President.',sentences:[{
+    tokens:['a','S','(1)','前',"S'",'','','nC'].map(text => ({slot:{kind:'single',text}})),
+    structures:[
+      {id:2,kind:'group',members:[{token:3,port:'single'},{structure:1,port:'left'}],form:'underline',mark:''},
+      {id:1,kind:'group',members:[{token:5,port:'single'},{token:6,port:'single'}],form:'T',mark:'',slots:{
+        left:{kind:'single',text:'n'},right:{kind:'single',text:'-(5)'}
+      }}
+    ],
+    arrows:[{from:{token:0,port:'single'},to:{token:1,port:'single'}}]
+  }]};
+  await page.evaluate(value => window.KiriEditorData.loadInnerJson(value),inner);
+  await page.waitForFunction(() => document.querySelector('.group-verbal-left[data-group-work="1"]'),null,{timeout:2000});
+  const geometry=await page.evaluate(() => {
+    const slotElement=document.querySelector('.group-verbal-left[data-group-work="1"]');
+    const slot=slotElement?.getBoundingClientRect();
+    const lines=[...document.querySelectorAll('.group-underline[data-group-underline="2"]')]
+      .map(element => element.getBoundingClientRect());
+    return {
+      slotBottom:slot?.bottom ?? null,
+      lineTops:lines.map(line => line.top),
+      groupIds:[...document.querySelectorAll('[data-group-underline]')].map(element => element.dataset.groupUnderline)
+    };
+  });
+  assert.ok(geometry.slotBottom != null,JSON.stringify(geometry));
+  assert.equal(geometry.lineTops.length,2);
+  assert.ok(geometry.lineTops.every(top => top >= geometry.slotBottom),JSON.stringify(geometry));
+});
+
 test('V can fix one segment, move gap, add another segment, and commit a non-contiguous group', async ({ page }) => {
   await typeKeys(page, ['V', 'l', 'V']);
   let snap = await groupSelectionSnapshot(page);
@@ -1228,6 +1474,7 @@ test('j enters a committed V underline and k returns to the preserved column', a
 
 test('V on a selected underline shows the gray selection cursor on that underline', async ({ page }) => {
   await typeKeys(page, ['V', 'l', 'Enter', 'V']);
+  await page.waitForTimeout(100);
   const snap = await groupSelectionSnapshot(page);
   assert.match(snap.mode, /^GROUP SELECT/);
   assert.equal(snap.active.length, 1);
@@ -1381,7 +1628,7 @@ test('h and l leave a non-contiguous underline through its unselected gap', asyn
   await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
   await page.waitForTimeout(50);
 
-  await page.locator('.word[data-index="3"]').click();
+  await page.locator('.word[data-index="3"]').evaluate(element => element.click());
   await press(page,'h');
   assert.equal((await currentCursor(page)).word,2);
 
@@ -1485,13 +1732,13 @@ test('l reaches President through adjacent child and parent underlines', async (
   await press(page,'h');
   cursor=await currentCursor(page);
   assert.equal(cursor.group,'4');
-  assert.ok(cursor.classes.includes('group-mark-cursor'));
+  assert.ok(cursor.classes.includes('group-underline-cursor'));
   await press(page,'l');
   cursor=await currentCursor(page);
   assert.equal(cursor.word,7);
 });
 
-test('h moves from President to the adjacent group slot instead of its inner right leaf', async ({ page }) => {
+test('h moves from President to the adjacent empty group cell instead of its inner right leaf', async ({ page }) => {
   const inner={version:1,text:'being elected President.',sentences:[{
     tokens:Array.from({length:3},() => ({slot:{kind:'single',text:''}})),
     structures:[
@@ -1502,14 +1749,10 @@ test('h moves from President to the adjacent group slot instead of its inner rig
   await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
   await page.waitForTimeout(50);
   await page.locator('.word[data-index="2"]').click();
-  const beforeBox=await page.locator('.mark-cursor').boundingBox();
   await press(page,'h');
   let cursor=await currentCursor(page);
   assert.equal(cursor.group,'1');
-  assert.ok(cursor.classes.includes('group-mark-cursor'));
-  const afterBox=await page.locator('.group-mark-cursor').boundingBox();
-  const centerDelta=Math.abs((beforeBox.y+beforeBox.height/2)-(afterBox.y+afterBox.height/2));
-  assert.ok(centerDelta <= 2,JSON.stringify({beforeBox,afterBox,centerDelta}));
+  assert.ok(cursor.classes.includes('group-underline-cursor'));
 
   await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
   await page.waitForTimeout(50);
@@ -1568,28 +1811,33 @@ test('j and k traverse four nested underlines while an orange selection is fixed
 
   for(const group of ['1','2','3','4']){
     await press(page,'j');
+    await page.waitForTimeout(50);
     snap=await groupSelectionSnapshot(page);
     assert.equal(snap.cursor[0].group,group);
     assert.equal(snap.fixed.length,1);
   }
   for(const group of ['3','2','1']){
     await press(page,'k');
+    await page.waitForTimeout(50);
     snap=await groupSelectionSnapshot(page);
     assert.equal(snap.cursor[0].group,group);
     assert.equal(snap.fixed.length,1);
   }
   await press(page,'k');
+  await page.waitForTimeout(50);
   snap=await groupSelectionSnapshot(page);
   assert.equal(snap.cursor[0].word,0);
   assert.equal(snap.fixed.length,1);
 
   await typeKeys(page,['j','V','j']);
+  await page.waitForTimeout(50);
   snap=await groupSelectionSnapshot(page);
   assert.match(snap.mode,/^GROUP SELECT/);
   assert.equal(snap.cursor[0].group,'2');
   assert.equal(snap.fixed.length,1);
   assert.equal(snap.active.length,2);
   await press(page,'k');
+  await page.waitForTimeout(50);
   snap=await groupSelectionSnapshot(page);
   assert.equal(snap.cursor[0].group,'1');
   assert.equal(snap.active.length,1);
@@ -1782,7 +2030,7 @@ test('l uses the rendered row snapshot and moves from the scolded group to by', 
   await press(page,'l');
   const cursor=await currentCursor(page);
   assert.equal(cursor.word,5);
-  assert.equal(cursor.text,'pre');
+  assert.equal(cursor.text,'前');
   assert.equal(cursor.group,null);
 });
 
@@ -2042,12 +2290,149 @@ test('the every-day arrow lane clears the regular-times underline and mark band'
   const geometry=await page.evaluate(() => {
     const workspace=document.querySelector('#workspace').getBoundingClientRect();
     const line=document.querySelector('.group-underline[data-group-underline="7"]').getBoundingClientRect();
-    const every=[...document.querySelectorAll('#arrowLayer > path[marker-end]')][2]
-      .getAttribute('d').match(/-?\d+(?:\.\d+)?/g).map(Number);
-    return {regularUnderlineTop:line.top-workspace.top,everyLaneY:every[3]};
+    const paths=[...document.querySelectorAll('#arrowLayer > path[marker-end]')];
+    const every=paths[2]?.getAttribute('d')?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) || [];
+    return {
+      regularUnderlineTop:line.top-workspace.top,
+      everyLaneY:every[3],
+      pathCount:paths.length,
+      groupMarks:[...document.querySelectorAll('.group-mark')].map(element => element.textContent)
+    };
   });
 
-  assert.ok(geometry.everyLaneY-geometry.regularUnderlineTop >= 24,JSON.stringify(geometry));
+  assert.ok(Number.isFinite(geometry.everyLaneY) && geometry.everyLaneY-geometry.regularUnderlineTop >= 24,JSON.stringify(geometry));
+});
+
+test('arrow lanes reserve vertical space before the following sentence row', async ({ page }) => {
+  const repeated=Array.from({length:6},(_,index) => ({
+    from:{token:index,port:'single'},
+    to:{token:6,port:'single'}
+  }));
+  const inner={version:1,text:'A B C D E F G\nH I',sentences:[
+    {
+      tokens:Array.from({length:7},(_,index) => ({
+        slot:{kind:'single',text:index<6 ? 'a' : 'V'}
+      })),
+      arrows:repeated
+    },
+    {tokens:[
+      {slot:{kind:'single',text:'S'}},
+      {slot:{kind:'single',text:''}}
+    ]}
+  ]};
+  await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
+  const geometry=await page.evaluate(() => {
+    const workspace=document.querySelector('#workspace');
+    const workspaceRect=workspace.getBoundingClientRect();
+    const pathBottoms=[...document.querySelectorAll('#arrowLayer > path')].map(path => {
+      const box=path.getBBox();
+      return box.y+box.height;
+    });
+    const next=document.querySelector('.word[data-index="7"]').getBoundingClientRect();
+    const sentence=document.querySelector('#sentence').getBoundingClientRect();
+    const sentenceBreak=document.querySelector('.sentence-break[data-after-sentence="0"]');
+    return {
+      pathCount:pathBottoms.length,
+      arrowBottom:Math.max(...pathBottoms),
+      nextRowTop:next.top-workspaceRect.top+workspace.scrollTop,
+      sentenceBottom:sentence.bottom-workspaceRect.top+workspace.scrollTop,
+      reserve:Number.parseFloat(sentenceBreak.style.getPropertyValue('--arrow-sentence-reserve')) || 0,
+      breakHeight:sentenceBreak.getBoundingClientRect().height
+    };
+  });
+  assert.equal(geometry.pathCount,6);
+  assert.ok(geometry.reserve>0,JSON.stringify(geometry));
+  assert.ok(geometry.breakHeight>=geometry.reserve,JSON.stringify(geometry));
+  assert.ok(geometry.nextRowTop>=geometry.arrowBottom+5,JSON.stringify(geometry));
+  assert.ok(geometry.sentenceBottom>=geometry.arrowBottom+5,JSON.stringify(geometry));
+});
+
+test('arrow routing ignores an underline with the same GroupId in another sentence', async ({ page }) => {
+  const inner={version:1,text:'A B C\nD E F',sentences:[
+    {
+      tokens:[
+        {slot:{kind:'single',text:'a'}},
+        {slot:{kind:'single',text:''}},
+        {slot:{kind:'single',text:'S'}}
+      ],
+      structures:[{
+        id:1,kind:'group',members:[{token:1,port:'single'},{token:2,port:'single'}],form:'underline',mark:'n'
+      }],
+      arrows:[{from:{token:0,port:'single'},to:{token:2,port:'single'}}]
+    },
+    {
+      tokens:[
+        {slot:{kind:'single',text:'a'}},
+        {slot:{kind:'single',text:''}},
+        {slot:{kind:'single',text:'S'}}
+      ],
+      structures:[{
+        id:1,kind:'group',members:[{token:0,port:'single'},{token:1,port:'single'}],form:'underline',mark:'ad'
+      }]
+    }
+  ]};
+  await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
+  const geometry=await page.evaluate(() => {
+    const workspace=document.querySelector('#workspace');
+    const workspaceRect=workspace.getBoundingClientRect();
+    const arrow=document.querySelector('#arrowLayer > path[data-arrow-sentence="0"]');
+    const secondRow=document.querySelector('.word[data-index="3"]').getBoundingClientRect();
+    const secondGroup=document.querySelector(
+      '.group-underline[data-group-sentence="1"][data-group-underline="1"]'
+    ).getBoundingClientRect();
+    return {
+      laneY:Number(arrow.dataset.arrowLaneY),
+      secondRowTop:secondRow.top-workspaceRect.top+workspace.scrollTop,
+      secondGroupTop:secondGroup.top-workspaceRect.top+workspace.scrollTop
+    };
+  });
+  assert.ok(geometry.laneY<geometry.secondRowTop,JSON.stringify(geometry));
+  assert.ok(geometry.laneY<geometry.secondGroupTop,JSON.stringify(geometry));
+});
+
+test('a same-row group arrow does not become a long multi-row route when another sentence is active', async ({ page }) => {
+  const inner={version:1,text:'A B C\nD E F',sentences:[
+    {
+      tokens:[
+        {slot:{kind:'single',text:'S'}},
+        {slot:{kind:'single',text:''}},
+        {slot:{kind:'single',text:''}}
+      ],
+      structures:[{
+        id:1,kind:'group',members:[{token:1,port:'single'},{token:2,port:'single'}],form:'underline',mark:'ad'
+      }],
+      arrows:[{from:{structure:1,port:'single'},to:{token:0,port:'single'}}]
+    },
+    {
+      tokens:[
+        {slot:{kind:'single',text:'S'}},
+        {slot:{kind:'single',text:''}},
+        {slot:{kind:'single',text:''}}
+      ],
+      structures:[{
+        id:1,kind:'group',members:[{token:0,port:'single'},{token:1,port:'single'}],form:'underline',mark:'n'
+      }]
+    }
+  ]};
+  await page.evaluate((document) => window.KiriEditorData.loadInnerJson(document),inner);
+  await page.locator('.word[data-index="3"]').evaluate(element => element.click());
+  await page.waitForTimeout(50);
+  const geometry=await page.evaluate(() => {
+    const workspace=document.querySelector('#workspace');
+    const workspaceRect=workspace.getBoundingClientRect();
+    const paths=[...document.querySelectorAll('#arrowLayer > path[data-arrow-sentence="0"]')];
+    const secondRow=document.querySelector('.word[data-index="3"]').getBoundingClientRect();
+    const boxes=paths.map(path => path.getBBox());
+    return {
+      pathCount:paths.length,
+      maxBottom:Math.max(...boxes.map(box => box.y+box.height)),
+      maxHeight:Math.max(...boxes.map(box => box.height)),
+      secondRowTop:secondRow.top-workspaceRect.top+workspace.scrollTop
+    };
+  });
+  assert.equal(geometry.pathCount,1,JSON.stringify(geometry));
+  assert.ok(geometry.maxBottom<geometry.secondRowTop,JSON.stringify(geometry));
+  assert.ok(geometry.maxHeight<80,JSON.stringify(geometry));
 });
 
 test('an arrow inside one underline keeps the same stem length as its group arrow', async ({ page }) => {
@@ -2344,7 +2729,7 @@ test('an arrow to an empty slot inside an underline ends at the slot top', async
 });
 
 test('save persists inner_json, reload restores it, and delete clears storage', async ({ page }) => {
-  const storageKey='kiri-kyo-editor:inner-json:v1';
+  const storageKey=await page.evaluate(() => window.KiriEditorData.storageKey);
   try {
     await typeKeys(page,['s','Enter','l','o','0','V','l','Enter']);
     const before=await internalJson(page);
@@ -2371,22 +2756,28 @@ test('core transitions are deterministic and do not mutate their input', async (
     const before = JSON.stringify(previous);
     const first = window.KiriEditorCore.syncText(previous, 'one two three');
     const second = window.KiriEditorCore.syncText(previous, 'one two three');
-    const nested={
-      groups:[
-        {id:1,members:[{word:0,slot:null}]},
-        {id:2,members:[{group:1,slot:null}],segments:[{startRef:{word:0,slot:null},endRef:{word:0,slot:null}}]}
-      ],
-      arrows:[]
-    };
+    const nested=window.KiriEditorCore.createState('one two');
+    const model=window.KiriEditorModel;
+    const firstToken=nested.sentenceStates[0].tokens[nested.sentenceStates[0].token_chain[0]];
+    nested.sentenceStates[0]=model.createUnderlineGroup(
+      nested.sentenceStates[0],[firstToken.word_slot.slot.id],1
+    );
+    const child=nested.sentenceStates[0].underline_groups.find(group => group.id === 1);
+    nested.sentenceStates[0]=model.createUnderlineGroup(
+      nested.sentenceStates[0],[child.slot.id],2
+    );
     const nestedBefore=JSON.stringify(nested);
-    const removed=window.KiriEditorCore.removeGroup(nested,1);
+    const removed=window.KiriEditorCore.removeGroup(nested,1,0);
     return {
       inputUnchanged: JSON.stringify(previous) === before,
       deterministic: JSON.stringify(first) === JSON.stringify(second),
-      distinct: first !== previous && first.workSlots !== previous.workSlots,
+      distinct:first !== previous
+        && first.sentenceStates !== previous.sentenceStates
+        && first.sentenceStates[0].tokens !== previous.sentenceStates[0].tokens,
       removeInputUnchanged:JSON.stringify(nested) === nestedBefore,
-      flattenedMembers:removed.groups[0].members,
-      clearedSegments:removed.groups[0].segments
+      hasProjection:Object.hasOwn(removed,'groupProjection'),
+      flattenedChildIds:removed.sentenceStates[0].underline_groups[0].child_ids,
+      expectedChildId:firstToken.word_slot.slot.id
     };
   });
   assert.deepEqual(result, {
@@ -2394,8 +2785,9 @@ test('core transitions are deterministic and do not mutate their input', async (
     deterministic:true,
     distinct:true,
     removeInputUnchanged:true,
-    flattenedMembers:[{word:0,slot:null}],
-    clearedSegments:[]
+    hasProjection:false,
+    flattenedChildIds:[result.expectedChildId],
+    expectedChildId:result.expectedChildId
   });
 });
 
@@ -2679,7 +3071,7 @@ test('inner_json round-trips all semantic state and excludes display data', asyn
     const inner={version:1,text:'a b',sentences:[{
       tokens:[
         {slot:slot('double','','S','O')},
-        {slot:slot('single','hidden')}
+        {slot:slot('single','V')}
       ],
       structures:[
         {kind:'verbal',token:1,form:'T',slots:{left:slot('single','V'),right:slot()}},
@@ -2694,11 +3086,10 @@ test('inner_json round-trips all semantic state and excludes display data', asyn
     const restored=core.stateFromInnerJson(inner);
     const roundTrip=core.createInnerJson(restored);
     const displayOnlyChanged=core.clone(restored);
-    for(const group of displayOnlyChanged.groups){
-      group.segments=[{startRef:{word:999,slot:null},endRef:{word:999,slot:null}}];
-      group.start=999;
-      group.end=999;
-      group.linkColor='#000000';
+    for(const sentenceState of displayOnlyChanged.sentenceStates){
+      for(const group of sentenceState.underline_groups){
+        group.display={segments:[999],start:999,end:999,linkColor:'#000000'};
+      }
     }
     const afterDisplayOnlyChange=core.createInnerJson(displayOnlyChanged);
     const display=core.createDisplayJson(inner);

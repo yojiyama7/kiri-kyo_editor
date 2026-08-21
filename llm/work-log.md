@@ -1,5 +1,49 @@
 # Work Log
 
+## 2026-08-22 文を跨ぐgroup cursorの一意化
+
+- 別文で同じGroupIdを再利用すると2つのgroup slotへ青カーソルが出る問題を修正した。描画互換cacheの`renderGroupId`だけを各文のgroupへ照合していたことと、logical gridのgroup semantic refから`sentence_idx`が欠落していたことが原因だった。
+- 文別logical gridの全semantic refを文番号付きにし、group cursorの表示を論理cursorから導出した`sentence_idx + GroupId + port`だけで決定するようにした。
+- 別文の同一GroupIdをクリックしても、選択文の下線slotにだけ青枠が1つ表示されるブラウザ回帰テストを追加した。
+
+## 2026-08-21 矢印レーンによる表示行の縦幅予約
+
+- 矢印level込みの各水平レーン下端と次表示行上端を比較し、不足する高さを所有文の表示領域として導出するようにした。明示的な文末は`.sentence-break`の`--arrow-sentence-reserve` height、同一文内の折返しは`--arrow-row-reserve` margin、最終文は`.sentence`のbottom paddingへ割り当てる。
+- height／marginは矢印endpointの矩形を変えずに後続行だけを押し下げるため、レーン計算が余白ぶん再び下へ逃げる循環を避ける。
+- 予測layoutだけでは下線再配置後のlevel再計算を取りこぼすため、各SVG pathへ所有文と実lane Yを付与し、最終描画後に文末heightと再照合する二段階補正を追加した。
+- 長い矢印経路の根本原因を修正した。GroupIdが文内名前空間であるのに、group端点からwordと表示行を導出する`refWord()`が`sentence_idx`を捨て、現在アクティブな文の同一GroupIdを解決していた。このため本来同一行の両端が別行と誤認され、workspace端を通る複数行経路になっていた。すべてのgroup ref解決と障害物DOM検索を`sentence_idx + GroupId`で限定した。
+- 別文に同じGroupIdを配置してその文をアクティブにしても、先行文の同一行矢印が単一pathのままで、次の文まで伸びない回帰テストを追加した。
+- 余白変更で移動した後続行についてgroup overlayを再配置し、下線・標識・矢印を新しい行座標へ揃える。
+- 6本の重なる矢印を同一行へ配置して深いレーンを作り、文末breakのheight、`.sentence`全体の下端、次文の表示行がすべて矢印レーンを包含するブラウザ回帰テストを追加した。
+
+## 2026-08-21 キー更新時間の可視化
+
+- editor内のkeydown開始から、同じ操作が予約したDOM・下線・矢印・navigation snapshot更新後の次taskまでを`performance.now()`で計測する診断層を追加した。
+- 単純なキー別集計ではなく、入力時のモードと意味上の操作を組にして集計する。同じ`l`でも通常移動、V選択中の移動、境界編集、矢印終点選択を分離し、`V`による選択モード開始も独立して測る。
+- 操作別の平均・直近・最大・回数を平均の重い順で`inner_json`欄の直下へ一覧表示する。計測値はSentenceState、undo/redo、inner_jsonへ含めない。
+- 計測で判明したV操作の再描画コストを削減。V開始・横移動・区間固定はSentenceState全体のcloneと本文DOM再生成を行わず、既存slotの選択classおよび現在文のgroup overlayだけを更新する。
+- V選択pathのslot包含判定をSet化し、各slotからの線形path探索を廃止した。
+- `render()`ごとに実質無変更の状態を全文cloneしていた`refreshEnabled()`呼出しと、overlay描画中に矢印cleanupのため全文cloneする経路を除去した。矢印開始時のoverlay同期描画と予約描画の二重実行も解消した。
+- モデルテスト、active規則監査191規則・36,481順序対・未解決矛盾0、ブラウザテスト133件を通過した。
+
+## 2026-08-21 補助要素と矢印のSentenceState統合
+
+- `boundary_items`を全境界記号の順序付き配列へ変更し、文内一意のBoundaryItemIdを追加。`[`だけがAtomicSlotを所有し、slotなしの`<`も安定IDで矢印端点にできるようにした。
+- 矢印を各`SentenceState.arrows`へ移し、word・pseudo・group・T/Double port・`[`はSlotId、slotなし境界はBoundaryItemIdで参照するモデルへ変更した。削除・Slot変換はgroupと矢印の参照を同じ純粋操作で整理する。
+- runtime・履歴・controllerからglobal `gaps[]`, `boundarySlots[]`, `gapTokens[]`, `arrows[]`, `gapTokenCursor`, `boundaryCursor`を削除。境界文字列と表示参照はSentenceStateから描画時に導出し、現在位置は論理`cursor.x/y`だけから解決する。
+- inner_json version 1は維持し、読込・保存adapter内だけで`boundaries`, `boundarySlots`, `pseudoTokens`および位置形式の矢印端点と新モデルを相互変換する。
+- BoundaryItemId、slot有無、矢印端点参照、削除時cleanup、runtime旧配列不在の回帰テストを追加。モデルテスト、active規則監査190規則・36,100順序対・未解決矛盾0、ブラウザテスト132件を通過した。
+
+## 2026-08-21 Token slotのSentenceState統合
+
+- `Token`へ`text`を追加し、runtimeの単語正本を文ごとの`SentenceState.tokens` recordと`token_chain`へ変更。旧`tokens[]`, `workSlots[]`, `verbals[]`をruntime state、履歴、core transitionから削除した。
+- 通常、double、Tを`AtomicSlot | DoubleSlot | TSlot`へ統合。Atomic→Doubleでは元slotを`lslot`、Atomic→Tでは元slotを`pre_slot`として保持し、解除時に同じAtomicSlot IDを復元する純粋変換を追加した。
+- 既知markの内部コードと表示値の双方向変換をモデルへ集約し、任意文字列はそのまま保持するようにした。
+- word slotの`enabled`保存を廃止し、外側group Tによる無効化を包含関係から導出するようにした。
+- inner_json version 1は維持し、single/double/verbalと新Slot unionの読込・保存adapterを実装した。旧Tの隠し元標識と表示左標識が異なる場合は表示左をpreへ正規化する。
+- runtimeに旧3配列がないこと、ID維持、Atomic↔Double/T、text追加入力で既存TokenIdが変わらないことをブラウザテストへ追加した。
+- モデルテスト通過、active規則監査182規則・33,124順序対・未解決矛盾0、ブラウザテスト129件通過。
+
 ## 2026-08-21 文単位処理の分離
 
 - 文書状態を改行ごとの`sentence_state`へ分割する`splitSentenceStates()`をcoreへ追加し、token、境界・疑似token、group、矢印を文単位の局所配列として渡すようにした。
@@ -513,3 +557,19 @@
 - 新規則を優先し、旧「同じ下線なら別区間へ直接移動」を削除。同じgroup優先は同一連続区間内だけに限定した。
 - 非連続区間の内側端では、方向側に隣接する未所属slotを空でも選ぶ。`taking h -> she`と`is l -> she`の両方向、および連続group内の従来移動を検証した。
 - 全ブラウザテスト結果: 113 passed。
+# 2026-08-21 UnderlineGroupのSentenceState統合
+
+- `UnderlineGroup`へSlotIdと別名前空間の`GroupId`を追加し、子要素、標識、T状態を`child_ids`とSlot unionへ統合した。
+- 疑似tokenと`[`境界slotを文ごとの`pseudo_tokens`、`boundary_items`へ所有させ、全文内SlotIdの一意性、groupの自己参照・循環参照をvalidatorで検査するようにした。
+- `buildSlotIndex()`、group用Atomic/Double/T変換、親を展開する`removeUnderlineGroup()`を純粋モデル操作として追加した。
+- global `groups[]`と履歴上のgroupsを除去し、既存UI用の旧形はSentenceStateから生成する一時projectionへ降格した。inner_json v1のmember参照は保存adapterでSlotIdと相互変換する。
+- group T内部の片側slotを直接含む親下線が単語段の高さへ描かれる問題を修正し、子slot描画後の実下端を同一表示行の全regionへ反映した。
+
+# 2026-08-21 UnderlineGroup旧表現の撤去
+
+- groupの作成、mark更新、T化・解除、削除をSentenceStateの純粋モデル操作へ移し、疑似token・境界削除時のchild_ids整理もSlotIdで行うようにした。
+- runtime stateと履歴からgroup projectionおよび旧group cursorフィールドを除去した。描画用値は`childRefs/regions/startWord/endWord/slot`としてSentenceStateから導出する。
+- group layoutをinner_json変換経由から`buildSentenceGroupView()`による直接計算へ変更した。
+- 文書レベル参照へ`sentence_idx`を追加し、別文で同じGroupId・SlotIdを使用しても保存・解決が衝突しないテストを追加した。
+- underlineと空Atomic group slotを同じ論理cellとし、空なら下線、markありならmark位置へカーソルを表示するよう統一した。
+- モデルテスト、188規則の全組合せ監査（35,344組・未解決0件）、全132ブラウザテストを通過した。

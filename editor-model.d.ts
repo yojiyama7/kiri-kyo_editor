@@ -35,28 +35,64 @@ export type WordSlot = {
 };
 
 export type UnderlineGroup = {
+  id: GroupId;
   kind: "underline_group";
   child_ids: SlotId[];
   slot: Slot;
 };
 
 export type TokenId = number;
+export type GroupId = number;
 
 export type Token = {
   id: TokenId;
+  text: string;
   word_slot: WordSlot;
+};
+
+export type LogicalCursor = {
+  x: number;
+  y: number;
+};
+
+export type PseudoToken = {
+  text: string;
+  word_slot: WordSlot;
+};
+
+export type BoundaryItemId = number;
+export type BoundarySymbol = "[" | "]" | "<" | ">" | "(" | ")";
+
+export type BoundaryItem = {
+  id: BoundaryItemId;
+  kind: "boundary_item";
+  symbol: BoundarySymbol;
+  slot: AtomicSlot | null;
+};
+
+export type ArrowEndpoint =
+  | { kind: "slot"; slot_id: SlotId }
+  | { kind: "boundary"; boundary_id: BoundaryItemId };
+
+export type Arrow = {
+  from: ArrowEndpoint;
+  to: ArrowEndpoint;
 };
 
 export type SentenceState = {
   tokens: Record<TokenId, Token>;
   token_chain: TokenId[];
+  pseudo_tokens: Record<number, PseudoToken[]>;
+  boundary_items: Record<number, BoundaryItem[]>;
   underline_groups: UnderlineGroup[];
-  cursor: number;
+  arrows: Arrow[];
+  cursor: LogicalCursor | null;
 };
 
 export type SentenceStateValidation = {
   slot_ids: SlotId[];
   token_ids: TokenId[];
+  group_ids: GroupId[];
 };
 
 export function isMark(value: unknown): value is Mark;
@@ -71,3 +107,55 @@ export function restoreWordSlotFromT(
   state: SentenceState,
   token_id: TokenId
 ): SentenceState;
+export function replaceWordSlotWithDouble(state: SentenceState, token_id: TokenId): SentenceState;
+export function restoreWordSlotFromDouble(state: SentenceState, token_id: TokenId): SentenceState;
+export function buildSlotIndex(state: SentenceState): Map<SlotId, {
+  kind: "token" | "pseudo_token" | "boundary" | "underline_group";
+  port: "single" | "left" | "right";
+  token_id?: TokenId;
+  group_id?: GroupId;
+  gap?: number;
+  index?: number;
+}>;
+export function createUnderlineGroup(
+  state: SentenceState,
+  child_ids: SlotId[],
+  group_id?: GroupId
+): SentenceState;
+export function setUnderlineGroupChildIds(
+  state: SentenceState,
+  group_id: GroupId,
+  child_ids: SlotId[]
+): SentenceState;
+export function setUnderlineGroupMark(
+  state: SentenceState,
+  group_id: GroupId,
+  port: "single" | "left" | "right",
+  mark: Mark
+): SentenceState;
+export function removeSlotReferences(state: SentenceState, slot_ids: SlotId[]): SentenceState;
+export function appendBoundaryItem(
+  state: SentenceState,
+  gap: number,
+  symbol: BoundarySymbol
+): SentenceState;
+export function removeBoundaryItem(
+  state: SentenceState,
+  gap: number,
+  index: number
+): SentenceState;
+export function clearBoundaryItems(state: SentenceState, gap: number): SentenceState;
+export function setBoundaryMark(
+  state: SentenceState,
+  boundary_id: BoundaryItemId,
+  mark: Mark
+): SentenceState;
+export function addArrow(state: SentenceState, from: ArrowEndpoint, to: ArrowEndpoint): SentenceState;
+export function removeArrowsFrom(state: SentenceState, from: ArrowEndpoint): SentenceState;
+export function replaceUnderlineGroupSlotWithT(state: SentenceState, group_id: GroupId): SentenceState;
+export function restoreUnderlineGroupSlotFromT(state: SentenceState, group_id: GroupId): SentenceState;
+export function replaceUnderlineGroupSlotWithDouble(state: SentenceState, group_id: GroupId): SentenceState;
+export function restoreUnderlineGroupSlotFromDouble(state: SentenceState, group_id: GroupId): SentenceState;
+export function removeUnderlineGroup(state: SentenceState, group_id: GroupId): SentenceState;
+export function markToDisplay(mark: Mark): string;
+export function displayToMark(display: string): Mark;
